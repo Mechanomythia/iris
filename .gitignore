@@ -1,0 +1,5 @@
+/bin/
+/dist/
+macos/Iris/.build/
+*.iris-tmp
+.DS_Store

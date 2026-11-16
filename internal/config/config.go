@@ -1,0 +1,305 @@
+// Package config loads ~/.config/iris/config.yaml.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/mechanomythia/iris/internal/paths"
+)
+
+// Tools Iris knows how to broker.
+const (
+	ToolKube   = "kube"
+	ToolAWS    = "aws"
+	ToolGCP    = "gcp"
+	ToolGit    = "git"
+	ToolDocker = "docker"
+	ToolHTTP   = "http"
+)
+
+var KnownTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker, ToolHTTP}
+
+type Duration struct{ time.Duration }
+
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	v, err := time.ParseDuration(n.Value)
+	if err != nil {
+		return fmt.Errorf("line %d: %w", n.Line, err)
+	}
+	d.Duration = v
+	return nil
+}
+
+func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
+
+type Config struct {
+	Approval   Approval   `yaml:"approval"`
+	Proxy      Proxy      `yaml:"proxy"`
+	Identities []Identity `yaml:"identities"`
+}
+
+type Approval struct {
+	// Timeout after which an unanswered prompt counts as Deny.
+	Timeout Duration `yaml:"timeout"`
+	// Options offered in the popup, shortest first. Allowed: once, 15m, 1h, session, or any Go duration.
+	Options []string `yaml:"options"`
+	// SessionMax caps a "session" grant (it is also revoked by the SessionEnd hook).
+	SessionMax Duration `yaml:"sessionMax"`
+	// TouchID asks the menu bar app to require Touch ID / password before granting.
+	TouchID bool `yaml:"touchID"`
+}
+
+type Proxy struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+	// AllowedHosts, if non-empty, is an egress allowlist for everything that
+	// passes through the proxy (glob: *.example.com). Hosts with an http
+	// identity are always allowed. Empty = allow all (Claude's own domain
+	// controls are bypassed once httpProxyPort is set, so consider filling this).
+	AllowedHosts []string `yaml:"allowedHosts"`
+}
+
+// Identity maps (tool, target) to a secret source.
+type Identity struct {
+	Tool   string `yaml:"tool"`
+	Target string `yaml:"target"` // kube context | aws profile | gcp project | git host | registry | http host
+	Scope  string `yaml:"scope"`  // label shown in the popup: read, write, admin...
+	Source Source `yaml:"source"`
+	// Format of the source output. Empty = auto-detect.
+	// token | exec-credential | aws-process | aws-sts | json
+	Format string   `yaml:"format,omitempty"`
+	MaxTTL Duration `yaml:"maxTTL,omitempty"`
+
+	// Tool specific.
+	SourceContext string `yaml:"sourceContext,omitempty"` // kube: context in your real kubeconfig to copy the cluster from (default: target)
+	Namespace     string `yaml:"namespace,omitempty"`     // kube: default namespace for Claude's context
+	Region        string `yaml:"region,omitempty"`        // aws
+	Username      string `yaml:"username,omitempty"`      // git / docker (default x-access-token)
+	Header        string `yaml:"header,omitempty"`        // http: header to inject (default Authorization)
+	ValueTemplate string `yaml:"valueTemplate,omitempty"` // http: e.g. "Bearer {{token}}" (default)
+	Note          string `yaml:"note,omitempty"`
+}
+
+// Source is exactly one of the fields.
+type Source struct {
+	Command  []string  `yaml:"command,omitempty"`  // run on the host, stdout is the secret
+	Op       string    `yaml:"op,omitempty"`       // 1Password reference op://vault/item/field
+	Keychain *Keychain `yaml:"keychain,omitempty"` // macOS Keychain generic password
+	Env      string    `yaml:"env,omitempty"`      // env var of the daemon
+	File     string    `yaml:"file,omitempty"`     // file readable by the daemon
+	Static   string    `yaml:"static,omitempty"`   // tests only
+}
+
+type Keychain struct {
+	Service string `yaml:"service"`
+	Account string `yaml:"account"`
+}
+
+func (i Identity) Key() string { return i.Tool + "/" + i.Target }
+
+func (i Identity) Label() string {
+	s := i.Tool + " · " + i.Target
+	if i.Scope != "" {
+		s += " · " + i.Scope
+	}
+	return s
+}
+
+func Default() *Config {
+	return &Config{
+		Approval: Approval{
+			Timeout:    Duration{60 * time.Second},
+			Options:    []string{"once", "15m", "1h", "session"},
+			SessionMax: Duration{8 * time.Hour},
+			TouchID:    false,
+		},
+		Proxy: Proxy{Enabled: false, Listen: "127.0.0.1:18899"},
+	}
+}
+
+func Load(path string) (*Config, error) {
+	if path == "" {
+		path = paths.ConfigFile()
+	}
+	c := Default()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return c, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(b, c); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, c.Validate()
+}
+
+func (c *Config) Validate() error {
+	seen := map[string]bool{}
+	for n, id := range c.Identities {
+		where := fmt.Sprintf("identities[%d] (%s)", n, id.Key())
+		if !contains(KnownTools, id.Tool) {
+			return fmt.Errorf("%s: unknown tool %q (want one of %s)", where, id.Tool, strings.Join(KnownTools, ", "))
+		}
+		if id.Target == "" {
+			return fmt.Errorf("%s: target is required", where)
+		}
+		if seen[id.Key()] {
+			return fmt.Errorf("%s: duplicate identity", where)
+		}
+		seen[id.Key()] = true
+		if err := id.Source.Validate(); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
+		}
+	}
+	if len(c.Approval.Options) == 0 {
+		return errors.New("approval.options must not be empty")
+	}
+	for _, o := range c.Approval.Options {
+		if _, err := ParseOption(o, c.Approval.SessionMax.Duration); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Source) Validate() error {
+	n := 0
+	if len(s.Command) > 0 {
+		n++
+	}
+	for _, v := range []string{s.Op, s.Env, s.File, s.Static} {
+		if v != "" {
+			n++
+		}
+	}
+	if s.Keychain != nil {
+		n++
+	}
+	if n != 1 {
+		return fmt.Errorf("source must set exactly one of command, op, keychain, env, file (got %d)", n)
+	}
+	return nil
+}
+
+func (s Source) Describe() string {
+	switch {
+	case len(s.Command) > 0:
+		return "command: " + strings.Join(s.Command, " ")
+	case s.Op != "":
+		return "1password: " + s.Op
+	case s.Keychain != nil:
+		return "keychain: " + s.Keychain.Service + "/" + s.Keychain.Account
+	case s.Env != "":
+		return "env: " + s.Env
+	case s.File != "":
+		return "file: " + s.File
+	default:
+		return "static"
+	}
+}
+
+func (c *Config) Find(tool, target string) (Identity, bool) {
+	for _, id := range c.Identities {
+		if id.Tool == tool && id.Target == target {
+			return id, true
+		}
+	}
+	return Identity{}, false
+}
+
+func (c *Config) ByTool(tool string) []Identity {
+	var out []Identity
+	for _, id := range c.Identities {
+		if id.Tool == tool {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// Option is one popup button.
+type Option struct {
+	Name string        // as configured: once, 15m, session
+	TTL  time.Duration // 0 for once
+	Once bool
+	// Session grants are revoked by the SessionEnd hook.
+	Session bool
+}
+
+func ParseOption(s string, sessionMax time.Duration) (Option, error) {
+	switch s {
+	case "once":
+		return Option{Name: s, Once: true}, nil
+	case "session":
+		if sessionMax <= 0 {
+			sessionMax = 8 * time.Hour
+		}
+		return Option{Name: s, TTL: sessionMax, Session: true}, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return Option{}, fmt.Errorf("approval option %q: want once, session or a duration like 15m", s)
+	}
+	return Option{Name: s, TTL: d}, nil
+}
+
+func (o Option) Display() string {
+	switch {
+	case o.Once:
+		return "Once"
+	case o.Session:
+		return "Until session end"
+	}
+	d := o.TTL
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%d h", int(d.Hours()))
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%d min", int(d.Minutes()))
+	}
+	return d.String()
+}
+
+// Save writes the config (used by `iris provision` to append identities).
+func Save(path string, c *Config) error {
+	if path == "" {
+		path = paths.ConfigFile()
+	}
+	b, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Upsert replaces an identity with the same key or appends it.
+func (c *Config) Upsert(id Identity) {
+	for n := range c.Identities {
+		if c.Identities[n].Key() == id.Key() {
+			c.Identities[n] = id
+			return
+		}
+	}
+	c.Identities = append(c.Identities, id)
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

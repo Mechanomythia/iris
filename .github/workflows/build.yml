@@ -1,0 +1,68 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go tests (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Cross-compile darwin
+        run: GOOS=darwin GOARCH=arm64 go build ./... && GOOS=darwin GOARCH=amd64 go build ./...
+
+  macos:
+    name: macOS app
+    runs-on: macos-15
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Go tests (darwin)
+        run: go test ./...
+      - name: Build Iris.app
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.1.0-{0}', github.run_number) }}
+        run: |
+          VERSION="${VERSION#v}" macos/Iris/build-app.sh
+      - name: Smoke test bundled CLI
+        run: |
+          dist/Iris.app/Contents/Resources/bin/iris version
+          dist/Iris.app/Contents/Resources/bin/iris install --dry-run --no-launchd
+          lipo -archs dist/Iris.app/Contents/MacOS/Iris
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Iris-macOS
+          path: dist/Iris-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Iris-macOS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Iris-*.zip
+          generate_release_notes: true
