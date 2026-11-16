@@ -47,6 +47,10 @@ type Options struct {
 	IrisBin      string // absolute path to iris
 	HelperBin    string // absolute path to iris-helper
 	ExtraEnvDeny []string
+
+	// Set by Install per target.
+	Profile    string   // label for this Claude config dir (IRIS_PROFILE)
+	ClaudeDirs []string // all configured dirs: each target denies edits to all their settings
 }
 
 // Plan builds the settings edits for a config. Pure: no I/O.
@@ -76,8 +80,19 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	for _, f := range DenyFiles {
 		try(add("permissions.deny", "Read("+readRule(f)+")"))
 	}
-	for _, f := range []string{"~/.config/iris/**", "~/.local/share/iris/**", "~/.local/state/iris/**",
-		"~/.claude/settings.json", "~/Library/LaunchAgents/**"} {
+	protect := []string{"~/.config/iris/**", "~/.local/share/iris/**", "~/.local/state/iris/**", "~/Library/LaunchAgents/**"}
+	dirs := o.ClaudeDirs
+	if len(dirs) == 0 {
+		dirs = []string{paths.DefaultClaudeDir()}
+	}
+	for _, d := range dirs {
+		sp := paths.Tilde(paths.ClaudeSettingsIn(d))
+		if strings.HasPrefix(sp, "/") {
+			sp = "/" + sp // permission rules: //abs/path is absolute
+		}
+		protect = append(protect, sp)
+	}
+	for _, f := range protect {
 		try(add("permissions.deny", "Edit("+f+")"))
 	}
 	// Speed bump only (string match); the real protection is that the
@@ -91,6 +106,9 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	// 4. Point tools at Claude-only configs. Your own terminal never sees these.
 	env := map[string]string{
 		"IRIS_SOCKET": paths.BrokerSocket(),
+	}
+	if o.Profile != "" {
+		env["IRIS_PROFILE"] = o.Profile
 	}
 	if len(cfg.ByTool(config.ToolKube)) > 0 {
 		env["KUBECONFIG"] = paths.ClaudeKubeconfig()
@@ -133,8 +151,12 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 
 	// 5. Hooks: context for the popup, PATH shims, revoke on session end.
 	hook := func(event, matcher, sub string) {
+		cmd := shellQuote(o.IrisBin) + " hook " + sub
+		if o.Profile != "" {
+			cmd += " --profile " + shellQuote(o.Profile)
+		}
 		entry := map[string]any{
-			"hooks": []any{map[string]any{"type": "command", "command": shellQuote(o.IrisBin) + " hook " + sub, "timeout": 5}},
+			"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 5}},
 		}
 		if matcher != "" {
 			entry["matcher"] = matcher

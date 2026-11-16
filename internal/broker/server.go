@@ -106,7 +106,7 @@ func (s *Server) handleBroker(ctx context.Context, nc net.Conn) {
 		if pid == 0 {
 			pid = req.PID
 		}
-		p := ProcInfo{PID: pid, Cwd: req.Cwd, Argv: req.Argv}
+		p := ProcInfo{PID: pid, Cwd: req.Cwd, Argv: req.Argv, Profile: req.Profile}
 		// The helper is usually exec'd by kubectl/aws/git; show the parent's argv.
 		if req.PPID > 0 {
 			if inf, ok := peer.Lookup(req.PPID); ok && inf.Args != "" {
@@ -126,10 +126,10 @@ func (s *Server) handleBroker(ctx context.Context, nc net.Conn) {
 		}
 		_ = c.Send(protocol.Response{OK: true, Credential: cred})
 	case "context":
-		s.B.AddContext(req.Command, req.Cwd, req.SessionID)
+		s.B.AddContext(req.Command, req.Cwd, req.SessionID, req.Profile)
 		_ = c.Send(protocol.Response{OK: true})
 	case "revoke-session":
-		n := s.B.RevokeSession()
+		n := s.B.RevokeSession(req.Profile)
 		_ = c.Send(protocol.Response{OK: true, Revoked: n})
 	default:
 		_ = c.Send(protocol.Response{Error: "unknown op on broker socket: " + req.Op})

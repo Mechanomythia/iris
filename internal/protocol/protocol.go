@@ -27,6 +27,10 @@ type Request struct {
 	Cwd  string   `json:"cwd,omitempty"`
 	Argv []string `json:"argv,omitempty"`
 
+	// Profile names the Claude config dir (IRIS_PROFILE, set per settings
+	// file by iris install). Self-reported: a label, not a security boundary.
+	Profile string `json:"profile,omitempty"`
+
 	// context (PreToolUse hook)
 	Command   string `json:"command,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
@@ -63,6 +67,7 @@ type GrantInfo struct {
 	Tool      string    `json:"tool"`
 	Target    string    `json:"target"`
 	Scope     string    `json:"scope"`
+	Profile   string    `json:"profile,omitempty"`
 	Option    string    `json:"option"`
 	GrantedAt time.Time `json:"grantedAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -87,6 +92,7 @@ type Event struct {
 	Target      string       `json:"target,omitempty"`
 	Scope       string       `json:"scope,omitempty"`
 	Label       string       `json:"label,omitempty"`
+	Profile     string       `json:"profile,omitempty"`
 	Command     string       `json:"command,omitempty"`
 	ProcessPID  int          `json:"pid,omitempty"`
 	ProcessCwd  string       `json:"cwd,omitempty"`

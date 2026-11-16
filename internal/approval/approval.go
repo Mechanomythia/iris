@@ -20,6 +20,7 @@ import (
 type Request struct {
 	ID       string
 	Identity config.Identity
+	Profile  string // Claude config dir label
 	Command  string // from PreToolUse hook, advisory only
 	PID      int
 	Cwd      string
@@ -161,7 +162,7 @@ func resolve(r Request, choice, via string) Decision {
 func Event(r Request) protocol.Event {
 	ev := protocol.Event{
 		Type: "approval_request", ID: r.ID,
-		Tool: r.Identity.Tool, Target: r.Identity.Target, Scope: r.Identity.Scope, Label: r.Identity.Label(),
+		Tool: r.Identity.Tool, Target: r.Identity.Target, Scope: r.Identity.Scope, Label: r.Identity.Label(), Profile: r.Profile,
 		Command: r.Command, ProcessPID: r.PID, ProcessCwd: r.Cwd, ProcessArgv: r.Argv,
 		TouchID: r.TouchID, Deadline: r.Deadline,
 	}
@@ -174,7 +175,11 @@ func Event(r Request) protocol.Event {
 // Message is the human-readable prompt body (also used by the dialog fallback).
 func Message(r Request) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Claude wants to use: %s\n", r.Identity.Label())
+	who := "Claude"
+	if r.Profile != "" {
+		who += " (" + r.Profile + ")"
+	}
+	fmt.Fprintf(&b, "%s wants to use: %s\n", who, r.Identity.Label())
 	if r.Command != "" {
 		fmt.Fprintf(&b, "\nCommand:\n%s\n", truncate(r.Command, 300))
 	}

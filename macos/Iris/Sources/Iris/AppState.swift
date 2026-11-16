@@ -53,21 +53,28 @@ final class AppState: ObservableObject {
 
     private func decide(_ ev: BrokerEvent, choice: String) {
         guard let id = ev.id else { return }
+        let panel = panels[id]
         let send = { [weak self] (c: String) in
             self?.subscription.send(["op": "decision", "id": id, "choice": c])
             self?.panels.removeValue(forKey: id)?.close()
         }
-        guard choice != "deny", ev.touchID == true else { return send(choice) }
+        // The iris opens only once access is actually granted (after Touch ID
+        // when required); the decision is sent when the animation finishes.
+        let grant = { panel?.playOpen { send(choice) } ?? send(choice) }
+        let deny = { panel?.playDeny { send("deny") } ?? send("deny") }
+
+        if choice == "deny" { return deny() }
+        guard ev.touchID == true else { return grant() }
 
         let ctx = LAContext()
         var err: NSError?
         guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
-            // No biometrics/password available: fail closed.
-            return send("deny")
+            return deny() // no biometrics/password available: fail closed
         }
-        let reason = "allow Claude to use \(ev.label ?? "a credential")"
+        let who = ev.profile.map { "Claude (\($0))" } ?? "Claude"
+        let reason = "allow \(who) to use \(ev.label ?? "a credential")"
         ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
-            DispatchQueue.main.async { send(ok ? choice : "deny") }
+            DispatchQueue.main.async { ok ? grant() : deny() }
         }
     }
 

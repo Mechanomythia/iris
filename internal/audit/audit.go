@@ -15,6 +15,7 @@ type Entry struct {
 	Tool    string    `json:"tool,omitempty"`
 	Target  string    `json:"target,omitempty"`
 	Scope   string    `json:"scope,omitempty"`
+	Profile string    `json:"profile,omitempty"`
 	GrantID string    `json:"grant,omitempty"`
 	Option  string    `json:"option,omitempty"`
 	PID     int       `json:"pid,omitempty"`

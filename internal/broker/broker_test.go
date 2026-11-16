@@ -231,12 +231,12 @@ func dialSub(path string) (*protocol.Conn, error) {
 
 func TestContextMatchesTool(t *testing.T) {
 	b := New(config.Default(), "", audit.Open(t.TempDir()+"/a"))
-	b.AddContext("kubectl get pods", "", "")
-	b.AddContext("ls -la", "", "")
-	if got := b.contextFor("kube"); got != "kubectl get pods" {
+	b.AddContext("kubectl get pods", "", "", "")
+	b.AddContext("ls -la", "", "", "")
+	if got := b.contextFor("kube", ""); got != "kubectl get pods" {
 		t.Fatalf("kube: %q", got)
 	}
-	if got := b.contextFor("git"); got != "(latest Bash command) ls -la" {
+	if got := b.contextFor("git", ""); got != "(latest Bash command) ls -la" {
 		t.Fatalf("git: %q", got)
 	}
 	if containsWord("digit", "git") || !containsWord("cd x && git push", "git") {

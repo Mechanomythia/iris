@@ -14,6 +14,7 @@ struct BrokerEvent: Codable {
     var target: String?
     var scope: String?
     var label: String?
+    var profile: String?
     var command: String?
     var pid: Int?
     var cwd: String?
@@ -28,6 +29,7 @@ struct GrantInfo: Codable, Identifiable, Hashable {
     let tool: String
     let target: String
     let scope: String
+    var profile: String?
     let option: String
     let grantedAt: Date
     let expiresAt: Date
@@ -48,6 +50,7 @@ struct AuditEntry: Codable, Hashable {
     let event: String
     var tool: String?
     var target: String?
+    var profile: String?
     var option: String?
     var command: String?
     var detail: String?

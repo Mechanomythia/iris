@@ -39,9 +39,17 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 
 type Config struct {
+	Claude     Claude     `yaml:"claude"`
 	Approval   Approval   `yaml:"approval"`
 	Proxy      Proxy      `yaml:"proxy"`
 	Identities []Identity `yaml:"identities"`
+}
+
+// Claude lists the Claude Code config dirs (CLAUDE_CONFIG_DIR values) that
+// `iris install` configures. Empty = just the default (~/.claude, or
+// $CLAUDE_CONFIG_DIR when set).
+type Claude struct {
+	ConfigDirs []string `yaml:"configDirs,omitempty"`
 }
 
 type Approval struct {

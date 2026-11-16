@@ -72,7 +72,8 @@ func usage() {
 func request(tool, target string) (*protocol.Credential, error) {
 	cwd, _ := os.Getwd()
 	req := protocol.Request{Op: "credential", Tool: tool, Target: target,
-		PID: os.Getpid(), PPID: os.Getppid(), Cwd: cwd, Argv: os.Args}
+		PID: os.Getpid(), PPID: os.Getppid(), Cwd: cwd, Argv: os.Args,
+		Profile: os.Getenv("IRIS_PROFILE")} // set per Claude config dir by iris install
 	// Long timeout: a human may be looking at a popup.
 	resp, err := protocol.Call(paths.BrokerSocket(), req, 10*time.Minute)
 	if err != nil {

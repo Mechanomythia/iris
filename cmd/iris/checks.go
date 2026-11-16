@@ -72,55 +72,19 @@ func cmdDoctor() error {
 		c.ok("claude %d.%d.%d", v[0], v[1], v[2])
 	}
 
-	doc, err := install.ReadSettings(paths.ClaudeSettings())
-	if err != nil {
-		c.fail("%v", err)
-		doc = install.Doc{}
+	for _, dir := range install.ClaudeDirs(cfg) {
+		checkSettings(c, dir)
 	}
-	get := func(path string) any {
-		var cur any = map[string]any(doc)
-		for _, k := range strings.Split(path, ".") {
-			m, ok := cur.(map[string]any)
-			if !ok {
-				return nil
+	for _, cand := range install.DetectClaudeDirs() {
+		known := false
+		for _, d := range install.ClaudeDirs(cfg) {
+			if d == cand.Dir {
+				known = true
 			}
-			cur = m[k]
 		}
-		return cur
-	}
-	if get("sandbox.enabled") == true {
-		c.ok("sandbox.enabled")
-	} else {
-		c.fail("sandbox.enabled is not true in %s (run iris install)", paths.ClaudeSettings())
-	}
-	if get("sandbox.allowUnsandboxedCommands") == false {
-		c.ok("unsandboxed retry disabled")
-	} else {
-		c.fail("sandbox.allowUnsandboxedCommands is not false: Claude could retry outside the sandbox")
-	}
-	if get("sandbox.network.allowAllUnixSockets") == true {
-		c.fail("sandbox.network.allowAllUnixSockets is true: the sandbox could reach control.sock and approve itself")
-	}
-	socks, _ := get("sandbox.network.allowUnixSockets").([]any)
-	hasBroker := false
-	for _, s := range socks {
-		if s == paths.BrokerSocket() {
-			hasBroker = true
+		if cand.Exists && !known {
+			c.warn("Claude config dir %s (%s) is NOT protected by Iris: `iris claude add %s`", paths.Tilde(cand.Dir), strings.Join(cand.Reasons, ", "), paths.Tilde(cand.Dir))
 		}
-		if s == paths.ControlSocket() || (fmt.Sprint(s) != paths.BrokerSocket() && strings.HasPrefix(paths.ControlSocket(), fmt.Sprint(s))) {
-			c.fail("allowUnixSockets contains %v which exposes control.sock", s)
-		}
-	}
-	if hasBroker {
-		c.ok("broker socket allowed in sandbox")
-	} else {
-		c.fail("broker socket not in sandbox.network.allowUnixSockets")
-	}
-	if ex, _ := get("sandbox.excludedCommands").([]any); len(ex) > 0 {
-		c.warn("sandbox.excludedCommands runs %v outside the sandbox, where credentials are readable", ex)
-	}
-	if fs := get("sandbox.filesystem.disabled"); fs == true {
-		c.fail("sandbox.filesystem.disabled is true: credential files are readable")
 	}
 	for _, scope := range []string{".claude/settings.json", ".claude/settings.local.json"} {
 		if d, err := install.ReadSettings(scope); err == nil {
@@ -176,6 +140,67 @@ func cmdDoctor() error {
 		}
 	}
 	return c.done()
+}
+
+// checkSettings validates one Claude config dir's settings.json.
+func checkSettings(c *checker, dir string) {
+	sp := paths.ClaudeSettingsIn(dir)
+	fmt.Printf("  [%s] %s\n", paths.Profile(dir), paths.Tilde(sp))
+	doc, err := install.ReadSettings(sp)
+	if err != nil {
+		c.fail("%v", err)
+		doc = install.Doc{}
+	}
+	get := func(path string) any {
+		var cur any = map[string]any(doc)
+		for _, k := range strings.Split(path, ".") {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil
+			}
+			cur = m[k]
+		}
+		return cur
+	}
+	if get("sandbox.enabled") == true {
+		c.ok("sandbox.enabled")
+	} else {
+		c.fail("sandbox.enabled is not true (run iris install)")
+	}
+	if get("sandbox.allowUnsandboxedCommands") == false {
+		c.ok("unsandboxed retry disabled")
+	} else {
+		c.fail("sandbox.allowUnsandboxedCommands is not false: Claude could retry outside the sandbox")
+	}
+	if get("sandbox.network.allowAllUnixSockets") == true {
+		c.fail("sandbox.network.allowAllUnixSockets is true: the sandbox could reach control.sock and approve itself")
+	}
+	socks, _ := get("sandbox.network.allowUnixSockets").([]any)
+	hasBroker := false
+	for _, s := range socks {
+		if s == paths.BrokerSocket() {
+			hasBroker = true
+		}
+		if s == paths.ControlSocket() || (fmt.Sprint(s) != paths.BrokerSocket() && strings.HasPrefix(paths.ControlSocket(), fmt.Sprint(s))) {
+			c.fail("allowUnixSockets contains %v which exposes control.sock", s)
+		}
+	}
+	if hasBroker {
+		c.ok("broker socket allowed in sandbox")
+	} else {
+		c.fail("broker socket not in sandbox.network.allowUnixSockets")
+	}
+	if get("env.IRIS_PROFILE") == paths.Profile(dir) {
+		c.ok("profile %s", paths.Profile(dir))
+	} else {
+		c.warn("env.IRIS_PROFILE is not %q: re-run iris install", paths.Profile(dir))
+	}
+	if ex, _ := get("sandbox.excludedCommands").([]any); len(ex) > 0 {
+		c.warn("sandbox.excludedCommands runs %v outside the sandbox, where credentials are readable", ex)
+	}
+	if fs := get("sandbox.filesystem.disabled"); fs == true {
+		c.fail("sandbox.filesystem.disabled is true: credential files are readable")
+	}
 }
 
 func firstHTTP(cfg *config.Config) (string, bool) {

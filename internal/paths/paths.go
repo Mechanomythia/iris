@@ -10,6 +10,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func home() string {
@@ -69,11 +70,53 @@ func ClaudeDockerDir() string  { return filepath.Join(ClaudeDir(), "docker") }
 func ClaudeCABundle() string   { return filepath.Join(ClaudeDir(), "ca-bundle.pem") }
 func ShimDir() string          { return filepath.Join(ClaudeDir(), "bin") }
 
-func ClaudeSettings() string {
+// DefaultClaudeDir is where Claude Code keeps its config when no alias
+// overrides it.
+func DefaultClaudeDir() string {
 	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
-		return filepath.Join(d, "settings.json")
+		return Expand(d)
 	}
-	return filepath.Join(home(), ".claude", "settings.json")
+	return filepath.Join(home(), ".claude")
+}
+
+func ClaudeSettingsIn(dir string) string { return filepath.Join(Expand(dir), "settings.json") }
+
+// ClaudeSettings is the default config dir's settings file.
+func ClaudeSettings() string { return ClaudeSettingsIn(DefaultClaudeDir()) }
+
+// Profile names a Claude config dir for popups/audit: ~/.claude-work -> claude-work.
+func Profile(dir string) string {
+	b := strings.TrimPrefix(filepath.Base(filepath.Clean(Expand(dir))), ".")
+	if b == "" {
+		return "claude"
+	}
+	return b
+}
+
+// Expand resolves ~ and $HOME / ${HOME} and makes the path absolute.
+func Expand(p string) string {
+	p = strings.ReplaceAll(strings.ReplaceAll(p, "${HOME}", home()), "$HOME", home())
+	if p == "~" {
+		p = home()
+	} else if strings.HasPrefix(p, "~/") {
+		p = filepath.Join(home(), p[2:])
+	}
+	if a, err := filepath.Abs(p); err == nil {
+		p = a
+	}
+	return filepath.Clean(p)
+}
+
+// Tilde shortens a path under home to ~/... for display and permission rules.
+func Tilde(p string) string {
+	h := home()
+	if p == h {
+		return "~"
+	}
+	if strings.HasPrefix(p, h+"/") {
+		return "~/" + p[len(h)+1:]
+	}
+	return p
 }
 
 func LaunchAgentPlist() string {

@@ -1,12 +1,14 @@
 package install
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,13 +17,21 @@ import (
 	"github.com/mechanomythia/iris/internal/proxy"
 )
 
-type Result struct {
+// Target is one configured Claude config dir.
+type TargetResult struct {
+	Dir          string
+	Profile      string
 	SettingsPath string
 	Backup       string
-	Files        []string
-	Warnings     []string
-	LaunchAgent  string
 	Changes      int
+}
+
+type Result struct {
+	Targets     []TargetResult
+	Removed     []string // settings files Iris was taken out of (dir dropped from config)
+	Files       []string
+	Warnings    []string
+	LaunchAgent string
 }
 
 type InstallOptions struct {
@@ -29,6 +39,60 @@ type InstallOptions struct {
 	DryRun     bool
 	NoLaunchd  bool
 	ConfigPath string
+}
+
+// State is ~/.config/iris/installed.json: one manifest per settings file.
+type State struct {
+	Targets     map[string]*Manifest `json:"targets"` // key: settings.json path
+	LaunchAgent string               `json:"launchAgent,omitempty"`
+}
+
+func LoadState() *State {
+	st := &State{Targets: map[string]*Manifest{}}
+	b, err := os.ReadFile(paths.InstallManifest())
+	if err != nil {
+		return st
+	}
+	_ = json.Unmarshal(b, st)
+	if st.Targets == nil {
+		st.Targets = map[string]*Manifest{}
+	}
+	// v0.1.0 wrote a single manifest at the top level.
+	var old Manifest
+	if json.Unmarshal(b, &old) == nil && old.SettingsPath != "" && len(st.Targets) == 0 {
+		st.Targets[old.SettingsPath] = &old
+		st.LaunchAgent = old.LaunchAgent
+	}
+	return st
+}
+
+func (st *State) Save() error {
+	if len(st.Targets) == 0 && st.LaunchAgent == "" {
+		err := os.Remove(paths.InstallManifest())
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	b, _ := json.MarshalIndent(st, "", "  ")
+	return os.WriteFile(paths.InstallManifest(), b, 0o600)
+}
+
+// ClaudeDirs resolves the config dirs to configure (absolute, deduplicated).
+func ClaudeDirs(cfg *config.Config) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range cfg.Claude.ConfigDirs {
+		d = paths.Expand(d)
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		out = []string{paths.DefaultClaudeDir()}
+	}
+	return out
 }
 
 // Binaries resolves iris and iris-helper next to the running executable.
@@ -70,7 +134,9 @@ func Install(o InstallOptions) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res := &Result{SettingsPath: paths.ClaudeSettings()}
+	res := &Result{}
+	dirs := ClaudeDirs(cfg)
+	st := LoadState()
 
 	if cfg.Proxy.Enabled && !o.DryRun {
 		if _, err := proxy.EnsureCA(paths.CACert(), paths.CAKey()); err != nil {
@@ -78,26 +144,56 @@ func Install(o InstallOptions) (*Result, error) {
 		}
 	}
 
-	// Undo a previous install first so re-running is idempotent and picks up
-	// config changes (e.g. a newly added AWS identity adds AWS_CONFIG_FILE).
-	doc, err := ReadSettings(res.SettingsPath)
-	if err != nil {
-		return nil, err
+	// Every target denies Claude edits to every target's settings file, so
+	// one profile can't loosen another.
+	opts := o.Options
+	opts.ClaudeDirs = dirs
+
+	wanted := map[string]bool{}
+	type pending struct {
+		tr  TargetResult
+		doc Doc
+		m   *Manifest
 	}
-	if prev, err := LoadManifest(paths.InstallManifest()); err == nil && prev.SettingsPath == res.SettingsPath {
-		Revert(doc, prev)
+	var plans []pending
+	for _, dir := range dirs {
+		sp := paths.ClaudeSettingsIn(dir)
+		wanted[sp] = true
+		doc, err := ReadSettings(sp)
+		if err != nil {
+			return nil, err
+		}
+		// Undo the previous install first so re-running is idempotent and
+		// picks up config changes.
+		if prev, ok := st.Targets[sp]; ok {
+			Revert(doc, prev)
+		}
+		m := &Manifest{SettingsPath: sp, InstalledAt: time.Now().UTC()}
+		topts := opts
+		topts.Profile = paths.Profile(dir)
+		if err := Plan(&Editor{D: doc, M: m}, cfg, topts); err != nil {
+			return nil, fmt.Errorf("%s: %w", sp, err)
+		}
+		plans = append(plans, pending{tr: TargetResult{Dir: dir, Profile: topts.Profile, SettingsPath: sp,
+			Changes: len(m.Scalars) + len(m.ArrayAdds)}, doc: doc, m: m})
 	}
-	m := &Manifest{SettingsPath: res.SettingsPath, InstalledAt: time.Now().UTC()}
-	ed := &Editor{D: doc, M: m}
-	if err := Plan(ed, cfg, o.Options); err != nil {
-		return nil, err
+	var dropped []string
+	for sp := range st.Targets {
+		if !wanted[sp] {
+			dropped = append(dropped, sp)
+		}
 	}
-	res.Changes = len(m.Scalars) + len(m.ArrayAdds)
+	sort.Strings(dropped)
+
 	if o.DryRun {
+		for _, p := range plans {
+			res.Targets = append(res.Targets, p.tr)
+		}
+		res.Removed = dropped
 		return res, nil
 	}
 
-	files, err := Generate(cfg, o.Options)
+	files, err := Generate(cfg, opts)
 	res.Files = files
 	var w *Warnings
 	if errors.As(err, &w) {
@@ -106,55 +202,99 @@ func Install(o InstallOptions) (*Result, error) {
 		return res, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(res.SettingsPath), 0o700); err != nil {
-		return res, err
-	}
-	if b, err := os.ReadFile(res.SettingsPath); err == nil {
-		res.Backup = res.SettingsPath + ".iris-backup-" + time.Now().Format("20060102-150405")
-		if err := os.WriteFile(res.Backup, b, 0o600); err != nil {
+	for _, p := range plans {
+		if err := os.MkdirAll(filepath.Dir(p.tr.SettingsPath), 0o700); err != nil {
 			return res, err
 		}
+		if b, err := os.ReadFile(p.tr.SettingsPath); err == nil {
+			p.tr.Backup = p.tr.SettingsPath + ".iris-backup-" + time.Now().Format("20060102-150405")
+			if err := os.WriteFile(p.tr.Backup, b, 0o600); err != nil {
+				return res, err
+			}
+		}
+		if err := WriteSettings(p.tr.SettingsPath, p.doc); err != nil {
+			return res, err
+		}
+		st.Targets[p.tr.SettingsPath] = p.m
+		res.Targets = append(res.Targets, p.tr)
 	}
-	if err := WriteSettings(res.SettingsPath, doc); err != nil {
-		return res, err
+	for _, sp := range dropped {
+		if err := revertTarget(sp, st.Targets[sp]); err != nil {
+			res.Warnings = append(res.Warnings, err.Error())
+			continue
+		}
+		delete(st.Targets, sp)
+		res.Removed = append(res.Removed, sp)
 	}
 
 	if runtime.GOOS == "darwin" && !o.NoLaunchd {
 		if err := InstallLaunchAgent(o.IrisBin); err != nil {
 			res.Warnings = append(res.Warnings, "launchd: "+err.Error())
 		} else {
-			m.LaunchAgent = paths.LaunchAgentPlist()
-			res.LaunchAgent = m.LaunchAgent
+			st.LaunchAgent = paths.LaunchAgentPlist()
+			res.LaunchAgent = st.LaunchAgent
 		}
 	}
-	return res, SaveManifest(paths.InstallManifest(), m)
+	return res, st.Save()
+}
+
+func revertTarget(sp string, m *Manifest) error {
+	doc, err := ReadSettings(sp)
+	if err != nil {
+		return err
+	}
+	Revert(doc, m)
+	return WriteSettings(sp, doc)
 }
 
 type UninstallOptions struct {
-	Purge bool // also delete ~/.config/iris (config, CA)
+	Purge bool     // also delete ~/.config/iris (config, CA)
+	Dirs  []string // only these Claude config dirs (default: all)
 }
 
 func Uninstall(o UninstallOptions) ([]string, error) {
 	var notes []string
-	m, err := LoadManifest(paths.InstallManifest())
-	if err != nil {
-		return nil, fmt.Errorf("no install manifest at %s: %w", paths.InstallManifest(), err)
+	st := LoadState()
+	if len(st.Targets) == 0 && st.LaunchAgent == "" {
+		return nil, fmt.Errorf("nothing installed (no %s)", paths.InstallManifest())
 	}
-	doc, err := ReadSettings(m.SettingsPath)
-	if err != nil {
-		return nil, err
+	only := map[string]bool{}
+	for _, d := range o.Dirs {
+		only[paths.ClaudeSettingsIn(d)] = true
 	}
-	notes = append(notes, Revert(doc, m)...)
-	if err := WriteSettings(m.SettingsPath, doc); err != nil {
-		return notes, err
+	for sp, m := range st.Targets {
+		if len(only) > 0 && !only[sp] {
+			continue
+		}
+		doc, err := ReadSettings(sp)
+		if err != nil {
+			return notes, err
+		}
+		notes = append(notes, Revert(doc, m)...)
+		if err := WriteSettings(sp, doc); err != nil {
+			return notes, err
+		}
+		delete(st.Targets, sp)
+		notes = append(notes, "reverted Iris changes in "+sp)
 	}
-	notes = append(notes, "reverted Iris changes in "+m.SettingsPath)
-	if m.LaunchAgent != "" {
+	if len(st.Targets) > 0 {
+		var rest []string
+		for sp := range st.Targets {
+			rest = append(rest, sp)
+		}
+		sort.Strings(rest)
+		notes = append(notes, "still installed in: "+strings.Join(rest, ", ")+" (broker kept running)")
+		return notes, st.Save()
+	}
+	if st.LaunchAgent != "" {
 		_ = UninstallLaunchAgent()
+		st.LaunchAgent = ""
 		notes = append(notes, "removed launch agent")
 	}
 	_ = os.RemoveAll(paths.ClaudeDir())
-	_ = os.Remove(paths.InstallManifest())
+	if err := st.Save(); err != nil {
+		return notes, err
+	}
 	if o.Purge {
 		_ = os.RemoveAll(paths.ConfigDir())
 		_ = os.RemoveAll(paths.StateDir())

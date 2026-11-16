@@ -10,6 +10,7 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private var decided = false
     private let offset: Int
+    let shutter = ShutterModel()
 
     init(event: BrokerEvent, offset: Int, onChoice: @escaping (String) -> Void) {
         self.event = event
@@ -18,7 +19,7 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
     }
 
     func show() {
-        let view = ApprovalView(event: event) { [weak self] choice in self?.choose(choice) }
+        let view = ApprovalView(event: event, shutter: shutter) { [weak self] choice in self?.choose(choice) }
         let host = NSHostingController(rootView: view)
         let p = NSPanel(contentViewController: host)
         p.styleMask = [.titled, .closable, .nonactivatingPanel, .hudWindow, .utilityWindow]
@@ -47,6 +48,15 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         onChoice(choice)
     }
 
+    /// Iris opens (access granted), then `done` sends the decision.
+    func playOpen(then done: @escaping () -> Void) { shutter.open(then: done) }
+
+    /// Iris stays shut.
+    func playDeny(then done: @escaping () -> Void) {
+        guard panel != nil else { return done() }
+        shutter.deny(then: done)
+    }
+
     func close() {
         decided = true
         panel?.delegate = nil
@@ -61,6 +71,7 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
 
 struct ApprovalView: View {
     let event: BrokerEvent
+    @ObservedObject var shutter: ShutterModel
     let onChoice: (String) -> Void
     @State private var now = Date()
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -72,15 +83,19 @@ struct ApprovalView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 28))
-                    .foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Claude wants to use a credential")
+            HStack(spacing: 16) {
+                IrisShutter(openness: shutter.openness, granted: shutter.granted)
+                    .frame(width: 112, height: 112)
+                    .modifier(Shake(animatableData: shutter.shake))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.profile.map { "Claude (\($0)) wants a credential" } ?? "Claude wants a credential")
                         .font(.headline)
-                    Text(event.label ?? "\(event.tool ?? "?") · \(event.target ?? "?")")
+                    Label(event.label ?? "\(event.tool ?? "?") · \(event.target ?? "?")", systemImage: icon)
                         .font(.system(.title3, design: .rounded).weight(.semibold))
+                    if event.touchID == true {
+                        Label("Touch ID opens the iris", systemImage: "touchid")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -126,11 +141,6 @@ struct ApprovalView: View {
                         Button(opt.display) { onChoice(opt.name) }
                     }
                 }
-            }
-            if event.touchID == true {
-                Label("Touch ID required to allow", systemImage: "touchid")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(18)

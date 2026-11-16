@@ -17,6 +17,7 @@ type Grant struct {
 	Tool      string
 	Target    string
 	Scope     string
+	Profile   string
 	Option    string
 	Once      bool
 	Session   bool
@@ -27,7 +28,7 @@ type Grant struct {
 
 type Store struct {
 	mu  sync.Mutex
-	g   map[string]*Grant // key tool/target
+	g   map[string]*Grant // key tool/target@profile
 	now func() time.Time
 }
 
@@ -36,7 +37,9 @@ func New() *Store { return &Store{g: map[string]*Grant{}, now: time.Now} }
 // SetClock is for tests.
 func (s *Store) SetClock(f func() time.Time) { s.now = f }
 
-func key(tool, target string) string { return tool + "/" + target }
+// Grants are per Claude profile, so approving kubectl for "claude-work" does
+// not silently cover "claude-personal".
+func key(tool, target, profile string) string { return tool + "/" + target + "@" + profile }
 
 func NewID() string {
 	b := make([]byte, 6)
@@ -46,26 +49,26 @@ func NewID() string {
 
 // Add records a grant and returns it. A once-grant is consumed by the very
 // next Use (the request that caused the prompt).
-func (s *Store) Add(tool, target, scope, option string, ttl time.Duration, once, session bool) *Grant {
+func (s *Store) Add(tool, target, profile, scope, option string, ttl time.Duration, once, session bool) *Grant {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	g := &Grant{ID: NewID(), Tool: tool, Target: target, Scope: scope, Option: option,
+	g := &Grant{ID: NewID(), Tool: tool, Target: target, Profile: profile, Scope: scope, Option: option,
 		Once: once, Session: session, GrantedAt: now, ExpiresAt: now.Add(ttl)}
 	if once {
 		// A once grant only needs to live long enough for the request that created it.
 		g.ExpiresAt = now.Add(time.Minute)
 	}
-	s.g[key(tool, target)] = g
+	s.g[key(tool, target, profile)] = g
 	return g
 }
 
 // Use returns a live grant for (tool,target) and counts the use. Once-grants
 // are removed on use.
-func (s *Store) Use(tool, target string) (*Grant, bool) {
+func (s *Store) Use(tool, target, profile string) (*Grant, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := key(tool, target)
+	k := key(tool, target, profile)
 	g, ok := s.g[k]
 	if !ok {
 		return nil, false
@@ -103,12 +106,13 @@ func (s *Store) RevokeAll() int {
 	return n
 }
 
-func (s *Store) RevokeSession() int {
+// RevokeSession drops "until session end" grants of one profile ("" = all).
+func (s *Store) RevokeSession(profile string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
 	for k, g := range s.g {
-		if g.Session {
+		if g.Session && (profile == "" || g.Profile == profile) {
 			delete(s.g, k)
 			n++
 		}
@@ -127,7 +131,7 @@ func (s *Store) List() []protocol.GrantInfo {
 			delete(s.g, k)
 			continue
 		}
-		out = append(out, protocol.GrantInfo{ID: g.ID, Tool: g.Tool, Target: g.Target, Scope: g.Scope,
+		out = append(out, protocol.GrantInfo{ID: g.ID, Tool: g.Tool, Target: g.Target, Scope: g.Scope, Profile: g.Profile,
 			Option: g.Option, GrantedAt: g.GrantedAt, ExpiresAt: g.ExpiresAt, Uses: g.Uses})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ExpiresAt.Before(out[j].ExpiresAt) })

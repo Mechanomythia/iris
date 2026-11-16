@@ -9,14 +9,15 @@ struct IrisApp: App {
         MenuBarExtra {
             MenuContent().environmentObject(state)
         } label: {
-            Image(systemName: menuIcon)
+            Image(nsImage: IrisIcon.image(menuIcon))
         }
         .menuBarExtraStyle(.window)
     }
 
-    private var menuIcon: String {
-        if !state.connected { return "key.slash" }
-        return state.activeGrantCount > 0 ? "key.fill" : "key"
+    /// Closed iris = nothing granted; open iris = Claude currently holds a grant.
+    private var menuIcon: IrisIcon.State {
+        if !state.connected { return .disconnected }
+        return state.activeGrantCount > 0 ? .open : .closed
     }
 }
 
@@ -66,6 +67,9 @@ struct MenuContent: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("\(g.tool) · \(g.target)\(g.scope.isEmpty ? "" : " · " + g.scope)")
                             .font(.callout)
+                        if let p = g.profile, !p.isEmpty {
+                            Text(p).font(.caption2).foregroundStyle(.secondary)
+                        }
                         Text("\(g.option) · \(g.uses) use\(g.uses == 1 ? "" : "s") · expires \(g.expiresAt, style: .relative)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -105,8 +109,12 @@ struct MenuContent: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
             HStack {
-                Button("Set up Claude Code") { state.runCLI(["install"], title: "iris install") }
+                Button("Set up Claude Code") { state.runCLI(["install", "--detect"], title: "iris install") }
                 Button("Doctor") { state.runCLI(["doctor"], title: "iris doctor") }
+            }
+            HStack {
+                Button("Claude profiles") { state.runCLI(["claude", "detect"], title: "Claude config dirs") }
+                Button("Install `iris` command") { state.runCLI(["link", "--add-to-path"], title: "iris link") }
             }
             HStack {
                 Button("Edit config") { state.openConfig() }

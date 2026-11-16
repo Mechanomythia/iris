@@ -55,13 +55,15 @@ type hookContext struct {
 	command string
 	cwd     string
 	session string
+	profile string
 }
 
 // ProcInfo describes who asked.
 type ProcInfo struct {
-	PID  int
-	Cwd  string
-	Argv []string
+	PID     int
+	Cwd     string
+	Argv    []string
+	Profile string // Claude config dir label (self-reported)
 }
 
 func New(cfg *config.Config, cfgPath string, log *audit.Log) *Broker {
@@ -95,11 +97,11 @@ func (b *Broker) Reload() error {
 // AddContext records the pending command from the PreToolUse hook. It is
 // shown in the next popup within 60s. Advisory only: anything in the
 // sandbox can also send it, so it is never used for decisions.
-func (b *Broker) AddContext(command, cwd, session string) {
+func (b *Broker) AddContext(command, cwd, session, profile string) {
 	b.ctxMu.Lock()
 	defer b.ctxMu.Unlock()
 	now := b.now()
-	b.contexts = append(b.contexts, hookContext{at: now, command: command, cwd: cwd, session: session})
+	b.contexts = append(b.contexts, hookContext{at: now, command: command, cwd: cwd, session: session, profile: profile})
 	// keep the last 16 within 60s
 	cut := 0
 	for i, c := range b.contexts {
@@ -123,9 +125,10 @@ var toolWords = map[string][]string{
 	"http":   {"curl", "wget", "http", "gh"},
 }
 
-// contextFor picks the most recent hook command (last 60s) that mentions a
-// word associated with the tool; otherwise the latest command, labelled.
-func (b *Broker) contextFor(tool string) string {
+// contextFor picks the most recent hook command (last 60s) from the same
+// profile that mentions a word associated with the tool; otherwise the
+// latest command, labelled.
+func (b *Broker) contextFor(tool, profile string) string {
 	b.ctxMu.Lock()
 	defer b.ctxMu.Unlock()
 	now := b.now()
@@ -133,6 +136,9 @@ func (b *Broker) contextFor(tool string) string {
 		c := b.contexts[i]
 		if now.Sub(c.at) > time.Minute {
 			break
+		}
+		if profile != "" && c.profile != "" && c.profile != profile {
+			continue
 		}
 		for _, w := range toolWords[tool] {
 			if containsWord(c.command, w) {
@@ -171,7 +177,7 @@ func (b *Broker) Credential(ctx context.Context, tool, target string, p ProcInfo
 	cfg := b.Config()
 	id, ok := cfg.Find(tool, target)
 	if !ok {
-		b.Audit.Write(audit.Entry{Event: "error", Tool: tool, Target: target, PID: p.PID, Cwd: p.Cwd, Detail: "no identity configured"})
+		b.Audit.Write(audit.Entry{Event: "error", Tool: tool, Target: target, Profile: p.Profile, PID: p.PID, Cwd: p.Cwd, Detail: "no identity configured"})
 		return nil, fmt.Errorf("iris: no identity configured for %s/%s (add it to ~/.config/iris/config.yaml or run `iris provision`)", tool, target)
 	}
 
@@ -182,7 +188,7 @@ func (b *Broker) Credential(ctx context.Context, tool, target string, p ProcInfo
 
 	c, err := b.mint(ctx, id)
 	if err != nil {
-		b.Audit.Write(audit.Entry{Event: "error", Tool: tool, Target: target, GrantID: g.ID, PID: p.PID, Detail: err.Error()})
+		b.Audit.Write(audit.Entry{Event: "error", Tool: tool, Target: target, Profile: p.Profile, GrantID: g.ID, PID: p.PID, Detail: err.Error()})
 		return nil, fmt.Errorf("iris: minting %s failed: %w", id.Key(), err)
 	}
 	out := *c
@@ -193,19 +199,20 @@ func (b *Broker) Credential(ctx context.Context, tool, target string, p ProcInfo
 	if g.ExpiresAt.Before(out.ExpiresAt) {
 		out.ExpiresAt = g.ExpiresAt
 	}
-	b.Audit.Write(audit.Entry{Event: "issue", Tool: tool, Target: target, Scope: id.Scope, GrantID: g.ID,
+	b.Audit.Write(audit.Entry{Event: "issue", Tool: tool, Target: target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,
 		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Detail: "expires " + out.ExpiresAt.UTC().Format(time.RFC3339)})
 	return &out, nil
 }
 
 func (b *Broker) ensureGrant(ctx context.Context, cfg *config.Config, id config.Identity, p ProcInfo) (*grants.Grant, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		if g, ok := b.Grants.Use(id.Tool, id.Target); ok {
+		if g, ok := b.Grants.Use(id.Tool, id.Target, p.Profile); ok {
 			return g, nil
 		}
-		// One prompt per identity at a time; others wait for its outcome.
+		// One prompt per identity and profile at a time; others wait for its outcome.
+		pk := id.Key() + "@" + p.Profile
 		b.promptMu.Lock()
-		if pr, busy := b.prompts[id.Key()]; busy {
+		if pr, busy := b.prompts[pk]; busy {
 			b.promptMu.Unlock()
 			select {
 			case <-pr.done:
@@ -215,13 +222,13 @@ func (b *Broker) ensureGrant(ctx context.Context, cfg *config.Config, id config.
 			}
 		}
 		pr := &prompt{done: make(chan struct{})}
-		b.prompts[id.Key()] = pr
+		b.prompts[pk] = pr
 		b.promptMu.Unlock()
 
 		g, err := b.ask(ctx, cfg, id, p)
 
 		b.promptMu.Lock()
-		delete(b.prompts, id.Key())
+		delete(b.prompts, pk)
 		b.promptMu.Unlock()
 		close(pr.done)
 		if err != nil {
@@ -251,7 +258,7 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		timeout = time.Minute
 	}
 	req := approval.Request{
-		ID: grants.NewID(), Identity: id, Command: b.contextFor(id.Tool),
+		ID: grants.NewID(), Identity: id, Profile: p.Profile, Command: b.contextFor(id.Tool, p.Profile),
 		PID: p.PID, Cwd: p.Cwd, Argv: p.Argv, Options: opts, TouchID: cfg.Approval.TouchID,
 		Deadline: b.now().Add(timeout),
 	}
@@ -261,15 +268,15 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		if d.TimedOut {
 			ev = "timeout"
 		}
-		b.Audit.Write(audit.Entry{Event: ev, Tool: id.Tool, Target: id.Target, Scope: id.Scope,
+		b.Audit.Write(audit.Entry{Event: ev, Tool: id.Tool, Target: id.Target, Scope: id.Scope, Profile: p.Profile,
 			PID: p.PID, Cwd: p.Cwd, Command: req.Command, Detail: "via " + d.Via})
 		return nil, ErrDenied
 	}
-	g := b.Grants.Add(id.Tool, id.Target, id.Scope, d.Option.Name, d.Option.TTL, d.Option.Once, d.Option.Session)
-	b.Audit.Write(audit.Entry{Event: "grant", Tool: id.Tool, Target: id.Target, Scope: id.Scope, GrantID: g.ID,
+	g := b.Grants.Add(id.Tool, id.Target, p.Profile, id.Scope, d.Option.Name, d.Option.TTL, d.Option.Once, d.Option.Session)
+	b.Audit.Write(audit.Entry{Event: "grant", Tool: id.Tool, Target: id.Target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,
 		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Command: req.Command, Detail: "via " + d.Via})
 	b.Hub.Broadcast(protocol.Event{Type: "grants_changed"})
-	gg, ok := b.Grants.Use(id.Tool, id.Target)
+	gg, ok := b.Grants.Use(id.Tool, id.Target, p.Profile)
 	if !ok {
 		return nil, nil // revoked in between; loop re-prompts
 	}
@@ -314,10 +321,10 @@ func (b *Broker) Revoke(id string) int {
 	return n
 }
 
-func (b *Broker) RevokeSession() int {
-	n := b.Grants.RevokeSession()
+func (b *Broker) RevokeSession(profile string) int {
+	n := b.Grants.RevokeSession(profile)
 	if n > 0 {
-		b.Audit.Write(audit.Entry{Event: "revoke", Detail: fmt.Sprintf("session end (%d)", n)})
+		b.Audit.Write(audit.Entry{Event: "revoke", Profile: profile, Detail: fmt.Sprintf("session end (%d)", n)})
 		b.Hub.Broadcast(protocol.Event{Type: "grants_changed"})
 	}
 	return n

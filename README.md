@@ -24,6 +24,10 @@ The sandbox can't read `~/.kube`, `~/.aws`, `~/.config/gcloud`, `~/.ssh`, and so
 | `iris-helper` | tiny credential-helper binary, holds no secrets | inside the sandbox |
 | `Iris.app` | SwiftUI menu bar app: approval popups, Touch ID, active grants, revoke-all, recent activity, one-click setup | your Mac |
 
+![iris shutter](docs/iris-shutter.png)
+
+The popup and the menu bar icon are an iris shutter. In the menu bar it's closed when nothing is granted, open while Claude holds a grant, and struck through when the broker isn't reachable. In the popup it stays shut until you approve (after Touch ID, if enabled), then spirals open; Deny makes it clunk shut. It's drawn in code (`IrisShutter.swift`), with no image assets.
+
 ## Install
 
 From a release (built by CI): unzip `Iris-x.y.z.zip`, move `Iris.app` to `/Applications`, open it, then click **Set up Claude Code** in the menu. Or:
@@ -39,6 +43,45 @@ iris install          # merges ~/.claude/settings.json, generates Claude-only co
 ```bash
 make app              # macOS: dist/Iris.app (needs Xcode CLT + Go)
 ```
+
+### Getting `iris` on your PATH
+
+The app bundles the CLI at `/Applications/Iris.app/Contents/Resources/bin/iris`. Link it once, from the app menu (**Install `iris` command**) or from a terminal:
+
+```bash
+/Applications/Iris.app/Contents/Resources/bin/iris link --add-to-path
+```
+
+This symlinks `iris` into the first writable dir already on your PATH (`~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`). If none qualifies, it uses `~/.local/bin` and, with `--add-to-path`, adds that dir to your `~/.zshrc` (or `.bash_profile` / fish config) once. Open a new terminal afterwards. `iris-helper` stays inside the app and is referenced by absolute path, so it doesn't need to be on PATH. If you move the app, re-run `iris link` and `iris install`.
+
+### Several Claude aliases (`CLAUDE_CONFIG_DIR`)
+
+If you run e.g. `alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'`, each config dir has its own `settings.json` and needs its own Iris setup.
+
+```bash
+iris claude detect            # finds ~/.claude*, CLAUDE_CONFIG_DIR=… in ~/.zshrc etc., $CLAUDE_CONFIG_DIR
+```
+
+```bash
+iris install --detect         # configure all of them (the app's "Set up Claude Code" does this)
+```
+
+```bash
+iris claude add ~/.claude-oss
+```
+
+```bash
+iris claude remove ~/.claude-oss    # takes Iris back out of that dir's settings
+```
+
+The list is stored as `claude.configDirs` in the Iris config. Each dir gets a **profile** named after it (`~/.claude-work` becomes `claude-work`):
+
+- The popup says "Claude (claude-work) wants a credential", and the audit log and grants list show the profile.
+- Grants are per profile: approving `kubectl` for `claude-work` doesn't cover `claude-personal`. "Until session end" grants are revoked when that profile's session ends.
+- Every dir denies Claude edits to *every* configured `settings.json`, so one profile can't loosen another.
+- `iris doctor` checks each dir and warns about any Claude config dir it finds that isn't protected.
+
+The profile label comes from inside the sandbox (`IRIS_PROFILE`), so it keeps grants apart and makes popups readable, but it isn't a security boundary. The popup is the boundary.
 
 `iris install` is idempotent and reversible: it writes a backup, records every entry it adds in `~/.config/iris/installed.json`, and `iris uninstall` removes exactly those entries. Re-run it after every config change; `iris provision` does that for you.
 

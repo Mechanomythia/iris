@@ -31,8 +31,10 @@ import (
 const usage = `iris: credential broker for Claude Code
 
 Setup
-  iris install [--dry-run] [--no-launchd]   configure Claude Code + start the broker
-  iris uninstall [--purge]                  revert everything install did
+  iris install [--detect] [--claude-dir D]  configure Claude Code (all config dirs) + start the broker
+  iris uninstall [--claude-dir D] [--purge] revert what install did (one dir or all)
+  iris claude list|detect|add|remove        manage Claude config dirs (aliases with CLAUDE_CONFIG_DIR)
+  iris link [--dir ~/.local/bin]            put iris on your PATH (symlink)
   iris provision kube|gcp|aws|github|secret create a Claude-only identity (iris provision <kind> -h)
   iris doctor                               check the installation
   iris config [path|show|edit]
@@ -81,6 +83,10 @@ func main() {
 		err = cmdHook(args)
 	case "provision":
 		err = cmdProvision(args)
+	case "claude":
+		err = cmdClaude(args)
+	case "link":
+		err = cmdLink(args)
 	case "doctor":
 		err = cmdDoctor()
 	case "selftest":
@@ -103,12 +109,32 @@ func main() {
 
 // ---------------- install ----------------
 
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
 func cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	dry := fs.Bool("dry-run", false, "show what would change")
 	noLaunchd := fs.Bool("no-launchd", false, "don't install the launchd agent (run `iris daemon` yourself)")
 	extraEnv := fs.String("deny-env", "", "extra comma-separated env vars to hide from the sandbox")
+	detect := fs.Bool("detect", false, "also configure every Claude config dir found by `iris claude detect`")
+	var dirs multiFlag
+	fs.Var(&dirs, "claude-dir", "Claude config dir (CLAUDE_CONFIG_DIR) to configure; repeatable, saved to config")
 	_ = fs.Parse(args)
+	if *detect {
+		for _, c := range install.DetectClaudeDirs() {
+			if c.Exists {
+				dirs = append(dirs, c.Dir)
+			}
+		}
+	}
+	if len(dirs) > 0 {
+		if err := addClaudeDirs(dirs, *dry); err != nil {
+			return err
+		}
+	}
 	return runInstall(*dry, *noLaunchd, splitList(*extraEnv), true)
 }
 
@@ -132,19 +158,29 @@ func runInstall(dry, noLaunchd bool, extraEnv []string, verbose bool) error {
 		return err
 	}
 	if dry {
-		fmt.Printf("dry run: %d settings changes would be made to %s\n", res.Changes, res.SettingsPath)
+		for _, t := range res.Targets {
+			fmt.Printf("dry run: %d Iris entries for profile %q in %s\n", t.Changes, t.Profile, t.SettingsPath)
+		}
+		for _, sp := range res.Removed {
+			fmt.Println("dry run: would remove Iris from", sp)
+		}
 		return nil
 	}
-	if verbose {
-		fmt.Printf("Claude Code settings: %s (%d Iris entries)\n", res.SettingsPath, res.Changes)
-		if res.Backup != "" {
-			fmt.Println("  backup:", res.Backup)
+	for _, t := range res.Targets {
+		fmt.Printf("Claude Code [%s]: %s (%d Iris entries)\n", t.Profile, paths.Tilde(t.SettingsPath), t.Changes)
+		if verbose && t.Backup != "" {
+			fmt.Println("  backup:", paths.Tilde(t.Backup))
 		}
+	}
+	for _, sp := range res.Removed {
+		fmt.Println("removed Iris from", paths.Tilde(sp), "(no longer in claude.configDirs)")
+	}
+	if verbose {
 		for _, f := range res.Files {
-			fmt.Println("  generated:", f)
+			fmt.Println("  generated:", paths.Tilde(f))
 		}
 		if res.LaunchAgent != "" {
-			fmt.Println("  launch agent:", res.LaunchAgent)
+			fmt.Println("  launch agent:", paths.Tilde(res.LaunchAgent))
 		}
 	}
 	for _, w := range res.Warnings {
@@ -154,9 +190,15 @@ func runInstall(dry, noLaunchd bool, extraEnv []string, verbose bool) error {
 	_ = control(protocol.Request{Op: "reload"}, nil)
 	if verbose {
 		fmt.Println("\nNext: restart running Claude Code sessions, then inside one run `iris selftest`.")
+		if cands := install.DetectClaudeDirs(); len(cands) > len(res.Targets) {
+			fmt.Println("Other Claude config dirs exist: see `iris claude detect` (add with `iris claude add <dir>`).")
+		}
+		if _, err := lookPathIris(); err != nil {
+			fmt.Println("`iris` is not on your PATH: run `" + irisBin + " link`")
+		}
 		cfg, _ := config.Load("")
 		if cfg != nil && len(cfg.Identities) == 0 {
-			fmt.Println("No identities yet. Add one with `iris provision ...` or edit", paths.ConfigFile())
+			fmt.Println("No identities yet. Add one with `iris provision ...` or edit", paths.Tilde(paths.ConfigFile()))
 		}
 	}
 	return nil
@@ -165,8 +207,15 @@ func runInstall(dry, noLaunchd bool, extraEnv []string, verbose bool) error {
 func cmdUninstall(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
 	purge := fs.Bool("purge", false, "also delete ~/.config/iris (config, CA) and state")
+	var dirs multiFlag
+	fs.Var(&dirs, "claude-dir", "only remove Iris from this Claude config dir (repeatable)")
 	_ = fs.Parse(args)
-	notes, err := install.Uninstall(install.UninstallOptions{Purge: *purge})
+	if len(dirs) > 0 {
+		if err := removeClaudeDirs(dirs); err != nil {
+			return err
+		}
+	}
+	notes, err := install.Uninstall(install.UninstallOptions{Purge: *purge, Dirs: dirs})
 	for _, n := range notes {
 		fmt.Println(n)
 	}
@@ -338,9 +387,13 @@ func cmdAudit(args []string) error {
 // ---------------- hooks (run by Claude Code, outside the sandbox) ----------------
 
 func cmdHook(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: iris hook pre-tool-use|session-start|session-end")
+	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+	profile := fs.String("profile", "", "Claude config dir label")
+	if len(args) == 0 {
+		return errors.New("usage: iris hook pre-tool-use|session-start|session-end [--profile name]")
 	}
+	event := args[0]
+	_ = fs.Parse(args[1:])
 	var in struct {
 		SessionID string `json:"session_id"`
 		Cwd       string `json:"cwd"`
@@ -352,11 +405,11 @@ func cmdHook(args []string) error {
 	b, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	_ = json.Unmarshal(b, &in)
 	// Hooks must never block or fail Claude: errors are swallowed.
-	switch args[0] {
+	switch event {
 	case "pre-tool-use":
 		if in.ToolName == "Bash" && in.ToolInput.Command != "" {
 			_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "context", Command: in.ToolInput.Command,
-				Cwd: in.Cwd, SessionID: in.SessionID}, 2*time.Second)
+				Cwd: in.Cwd, SessionID: in.SessionID, Profile: *profile}, 2*time.Second)
 		}
 	case "session-start":
 		if f := os.Getenv("CLAUDE_ENV_FILE"); f != "" {
@@ -373,9 +426,9 @@ func cmdHook(args []string) error {
 			}
 		}
 	case "session-end":
-		_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "revoke-session"}, 1*time.Second)
+		_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "revoke-session", Profile: *profile}, 1*time.Second)
 	default:
-		return fmt.Errorf("unknown hook %q", args[0])
+		return fmt.Errorf("unknown hook %q", event)
 	}
 	return nil
 }

@@ -112,7 +112,7 @@ func TestInstallIsIdempotentAndGenerates(t *testing.T) {
 	if string(first) != string(second) {
 		t.Fatal("install not idempotent")
 	}
-	if r1.Backup == "" {
+	if r1.Targets[0].Backup == "" {
 		t.Fatal("no backup")
 	}
 	kc, _ := os.ReadFile(paths.ClaudeKubeconfig())
@@ -151,5 +151,85 @@ func TestInstallIsIdempotentAndGenerates(t *testing.T) {
 	}
 	if _, err := os.Stat(paths.ClaudeDir()); !os.IsNotExist(err) {
 		t.Fatal("generated dir not removed")
+	}
+}
+
+func TestMultipleClaudeDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("IRIS_HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	work := filepath.Join(home, ".claude-work")
+	personal := filepath.Join(home, ".claude")
+	for _, d := range []string{work, personal} {
+		os.MkdirAll(d, 0o700)
+	}
+	os.WriteFile(filepath.Join(work, "settings.json"), []byte(`{"model":"x"}`), 0o600)
+	// alias in .zshrc is detected
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'\n# CLAUDE_CONFIG_DIR=~/.ignored\n"), 0o600)
+	got := DetectClaudeDirs()
+	if len(got) != 2 || got[1].Dir != work || got[1].Profile != "claude-work" || !strings.Contains(strings.Join(got[1].Reasons, ","), "~/.zshrc") {
+		t.Fatalf("detect: %+v", got)
+	}
+
+	cfg := testCfg()
+	cfg.Claude.ConfigDirs = []string{"~/.claude", "~/.claude-work"}
+	os.MkdirAll(filepath.Join(home, ".config", "iris"), 0o700)
+	config.Save(paths.ConfigFile(), cfg)
+	KubeClusterLookup = func(string) (map[string]any, error) { return map[string]any{"server": "https://k"}, nil }
+	opts := InstallOptions{Options: Options{IrisBin: "/b/iris", HelperBin: "/b/iris-helper"}, NoLaunchd: true}
+	res, err := Install(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Targets) != 2 {
+		t.Fatalf("targets: %+v", res.Targets)
+	}
+	ws, _ := os.ReadFile(filepath.Join(work, "settings.json"))
+	for _, w := range []string{`"IRIS_PROFILE": "claude-work"`, `"Edit(~/.claude/settings.json)"`, `"Edit(~/.claude-work/settings.json)"`,
+		`hook session-end --profile claude-work`, `"model": "x"`} {
+		if !strings.Contains(string(ws), w) {
+			t.Errorf("work settings missing %s:\n%s", w, ws)
+		}
+	}
+	ps, _ := os.ReadFile(filepath.Join(personal, "settings.json"))
+	if !strings.Contains(string(ps), `"IRIS_PROFILE": "claude"`) {
+		t.Errorf("personal settings:\n%s", ps)
+	}
+
+	// Dropping a dir from the config takes Iris out of it on the next install.
+	cfg.Claude.ConfigDirs = []string{"~/.claude"}
+	config.Save(paths.ConfigFile(), cfg)
+	res, err = Install(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Removed) != 1 || res.Removed[0] != filepath.Join(work, "settings.json") {
+		t.Fatalf("removed: %v", res.Removed)
+	}
+	ws, _ = os.ReadFile(filepath.Join(work, "settings.json"))
+	if strings.TrimSpace(string(ws)) != "{\n  \"model\": \"x\"\n}" {
+		t.Fatalf("work settings not restored:\n%s", ws)
+	}
+
+	// Partial uninstall keeps the rest.
+	cfg.Claude.ConfigDirs = []string{"~/.claude", "~/.claude-work"}
+	config.Save(paths.ConfigFile(), cfg)
+	Install(opts)
+	notes, err := Uninstall(UninstallOptions{Dirs: []string{work}})
+	if err != nil || !strings.Contains(strings.Join(notes, "\n"), "still installed in") {
+		t.Fatalf("%v %v", err, notes)
+	}
+	if _, err := os.Stat(paths.ClaudeDir()); err != nil {
+		t.Fatal("shared generated files removed while a dir is still installed")
+	}
+}
+
+func TestOldManifestFormat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("IRIS_HOME", home)
+	os.MkdirAll(paths.ConfigDir(), 0o700)
+	os.WriteFile(paths.InstallManifest(), []byte(`{"settingsPath":"/x/settings.json","scalars":[],"arrayAdds":[]}`), 0o600)
+	if st := LoadState(); st.Targets["/x/settings.json"] == nil {
+		t.Fatal("v0.1.0 manifest not migrated")
 	}
 }
