@@ -49,10 +49,10 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
     }
 
     /// Iris opens (access granted), then `done` sends the decision.
-    func playOpen(then done: @escaping () -> Void) { shutter.open(then: done) }
+    func playOpen(then done: @escaping @MainActor () -> Void) { shutter.open(then: done) }
 
     /// Iris stays shut.
-    func playDeny(then done: @escaping () -> Void) {
+    func playDeny(then done: @escaping @MainActor () -> Void) {
         guard panel != nil else { return done() }
         shutter.deny(then: done)
     }

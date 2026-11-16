@@ -64,50 +64,75 @@ struct IrisShutter: View, Animatable {
 
     var body: some View {
         Canvas { ctx, size in
-            let side = min(size.width, size.height)
-            let ring = side * 0.07
-            let r = side / 2 - ring
-            let c = CGPoint(x: size.width / 2, y: size.height / 2)
-            let g = IrisGeometry(center: c, radius: r, openness: CGFloat(openness), count: blades)
-            let disc = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
-
-            // What's behind the shutter.
-            ctx.drawLayer { l in
-                l.clip(to: disc)
-                let glow: Color = granted ? Color(red: 0.25, green: 0.85, blue: 0.55) : Color(white: 0.25)
-                l.fill(disc, with: .radialGradient(Gradient(colors: [glow.opacity(0.9), Color.black]),
-                                                   center: c, startRadius: 0, endRadius: r))
-            }
-
-            // Blades.
-            ctx.drawLayer { l in
-                l.clip(to: disc)
-                for i in 0..<blades {
-                    let shade = 0.50 + 0.18 * sin(Double(i) * 1.7)
-                    l.fill(Path(g.blade(i)), with: .linearGradient(
-                        Gradient(colors: [Color(white: shade + 0.2), Color(white: shade - 0.12)]),
-                        startPoint: CGPoint(x: c.x - r, y: c.y + r), endPoint: CGPoint(x: c.x + r, y: c.y - r)))
-                }
-                for i in 0..<blades {
-                    l.stroke(Path(g.edge(i)), with: .color(.black.opacity(0.6)), lineWidth: max(1, side / 140))
-                }
-                // Subtle inner shadow.
-                l.stroke(disc, with: .color(.black.opacity(0.5)), lineWidth: side / 40)
-            }
-
-            // Ring with bolts.
-            let ringPath = Path(ellipseIn: CGRect(x: c.x - r - ring / 2, y: c.y - r - ring / 2, width: 2 * r + ring, height: 2 * r + ring))
-            ctx.stroke(ringPath, with: .conicGradient(
-                Gradient(colors: [Color(white: 0.75), Color(white: 0.35), Color(white: 0.8), Color(white: 0.3), Color(white: 0.75)]),
-                center: c), lineWidth: ring)
-            for k in 0..<blades {
-                let a = Double(k) / Double(blades) * 2 * .pi
-                let p = CGPoint(x: c.x + (r + ring / 2) * cos(a), y: c.y + (r + ring / 2) * sin(a))
-                let s = ring * 0.32
-                ctx.fill(Path(ellipseIn: CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)), with: .color(Color(white: 0.2)))
-            }
+            render(&ctx, size: size)
         }
         .accessibilityLabel(openness > 0.5 ? "Iris open" : "Iris closed")
+    }
+
+    // Drawing is split into small, explicitly typed steps: one big Canvas
+    // closure exceeds the Swift type checker's time limit.
+
+    private struct Layout {
+        let c: CGPoint
+        let r: CGFloat
+        let ring: CGFloat
+        let side: CGFloat
+        let disc: Path
+    }
+
+    private func layout(_ size: CGSize) -> Layout {
+        let side: CGFloat = min(size.width, size.height)
+        let ring: CGFloat = side * 0.07
+        let r: CGFloat = side / 2 - ring
+        let c = CGPoint(x: size.width / 2, y: size.height / 2)
+        let disc = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        return Layout(c: c, r: r, ring: ring, side: side, disc: disc)
+    }
+
+    private func render(_ ctx: inout GraphicsContext, size: CGSize) {
+        let L = layout(size)
+        drawBackground(&ctx, L)
+        drawBlades(&ctx, L)
+        drawRing(&ctx, L)
+    }
+
+    private func drawBackground(_ ctx: inout GraphicsContext, _ L: Layout) {
+        let glow: Color = granted ? Color(red: 0.25, green: 0.85, blue: 0.55) : Color(white: 0.25)
+        let gradient = Gradient(colors: [glow.opacity(0.9), Color.black])
+        let shading = GraphicsContext.Shading.radialGradient(gradient, center: L.c, startRadius: 0, endRadius: L.r)
+        ctx.fill(L.disc, with: shading)
+    }
+
+    private func drawBlades(_ ctx: inout GraphicsContext, _ L: Layout) {
+        let g = IrisGeometry(center: L.c, radius: L.r, openness: CGFloat(openness), count: blades)
+        var l = ctx
+        l.clip(to: L.disc)
+        let start = CGPoint(x: L.c.x - L.r, y: L.c.y + L.r)
+        let end = CGPoint(x: L.c.x + L.r, y: L.c.y - L.r)
+        for i in 0..<blades {
+            let shade: Double = 0.50 + 0.18 * sin(Double(i) * 1.7)
+            let gradient = Gradient(colors: [Color(white: shade + 0.2), Color(white: shade - 0.12)])
+            l.fill(Path(g.blade(i)), with: .linearGradient(gradient, startPoint: start, endPoint: end))
+        }
+        let seamWidth: CGFloat = max(1, L.side / 140)
+        for i in 0..<blades {
+            l.stroke(Path(g.edge(i)), with: .color(.black.opacity(0.6)), lineWidth: seamWidth)
+        }
+        l.stroke(L.disc, with: .color(.black.opacity(0.5)), lineWidth: L.side / 40) // inner shadow
+    }
+
+    private func drawRing(_ ctx: inout GraphicsContext, _ L: Layout) {
+        let mid: CGFloat = L.r + L.ring / 2
+        let ringRect = CGRect(x: L.c.x - mid, y: L.c.y - mid, width: 2 * mid, height: 2 * mid)
+        let metal = Gradient(colors: [Color(white: 0.75), Color(white: 0.35), Color(white: 0.8), Color(white: 0.3), Color(white: 0.75)])
+        ctx.stroke(Path(ellipseIn: ringRect), with: .conicGradient(metal, center: L.c), lineWidth: L.ring)
+        let bolt: CGFloat = L.ring * 0.32
+        for k in 0..<blades {
+            let a: CGFloat = CGFloat(k) / CGFloat(blades) * 2 * .pi
+            let p = CGPoint(x: L.c.x + mid * cos(a), y: L.c.y + mid * sin(a))
+            let rect = CGRect(x: p.x - bolt / 2, y: p.y - bolt / 2, width: bolt, height: bolt)
+            ctx.fill(Path(ellipseIn: rect), with: .color(Color(white: 0.2)))
+        }
     }
 }
 
@@ -119,19 +144,26 @@ final class ShutterModel: ObservableObject {
     @Published var shake: CGFloat = 0
 
     /// Opens the iris, then calls `done` once the animation has played.
-    func open(then done: @escaping () -> Void) {
+    func open(then done: @escaping @MainActor () -> Void) {
         granted = true
         withAnimation(.easeInOut(duration: 0.75)) { openness = 1 }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95, execute: done)
+        after(0.95, done)
+    }
+
+    private func after(_ seconds: Double, _ f: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            f()
+        }
     }
 
     /// Stays shut with a short "clunk".
-    func deny(then done: @escaping () -> Void) {
+    func deny(then done: @escaping @MainActor () -> Void) {
         withAnimation(.easeOut(duration: 0.08)) { openness = 0.06 }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+        after(0.08) {
             withAnimation(.spring(response: 0.18, dampingFraction: 0.35)) { self.openness = 0; self.shake += 1 }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: done)
+        after(0.45, done)
     }
 }
 

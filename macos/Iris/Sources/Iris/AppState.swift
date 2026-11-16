@@ -54,14 +54,18 @@ final class AppState: ObservableObject {
     private func decide(_ ev: BrokerEvent, choice: String) {
         guard let id = ev.id else { return }
         let panel = panels[id]
-        let send = { [weak self] (c: String) in
+        let send: @MainActor (String) -> Void = { [weak self] c in
             self?.subscription.send(["op": "decision", "id": id, "choice": c])
             self?.panels.removeValue(forKey: id)?.close()
         }
         // The iris opens only once access is actually granted (after Touch ID
         // when required); the decision is sent when the animation finishes.
-        let grant = { panel?.playOpen { send(choice) } ?? send(choice) }
-        let deny = { panel?.playDeny { send("deny") } ?? send("deny") }
+        let grant: @MainActor () -> Void = {
+            if let panel { panel.playOpen { send(choice) } } else { send(choice) }
+        }
+        let deny: @MainActor () -> Void = {
+            if let panel { panel.playDeny { send("deny") } } else { send("deny") }
+        }
 
         if choice == "deny" { return deny() }
         guard ev.touchID == true else { return grant() }
@@ -74,7 +78,9 @@ final class AppState: ObservableObject {
         let who = ev.profile.map { "Claude (\($0))" } ?? "Claude"
         let reason = "allow \(who) to use \(ev.label ?? "a credential")"
         ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
-            DispatchQueue.main.async { ok ? grant() : deny() }
+            Task { @MainActor in
+                if ok { grant() } else { deny() }
+            }
         }
     }
 
@@ -126,26 +132,28 @@ final class AppState: ObservableObject {
             return
         }
         Task.detached {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: bin)
-            p.arguments = args
-            let pipe = Pipe()
-            p.standardOutput = pipe
-            p.standardError = pipe
-            var output = ""
-            do {
-                try p.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                p.waitUntilExit()
-                output = String(decoding: data, as: UTF8.self)
-                output += "\n(exit \(p.terminationStatus))"
-            } catch {
-                output = "failed to run iris: \(error)"
-            }
+            let output = Self.run(bin, args)
             await MainActor.run {
                 OutputWindow.show(title: title, text: output)
                 self.refresh()
             }
+        }
+    }
+
+    nonisolated private static func run(_ bin: String, _ args: [String]) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: bin)
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        do {
+            try p.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self) + "\n(exit \(p.terminationStatus))"
+        } catch {
+            return "failed to run iris: \(error)"
         }
     }
 

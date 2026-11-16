@@ -68,17 +68,22 @@ struct BrokerResponse: Codable {
 enum Wire {
     static let decoder: JSONDecoder = {
         let d = JSONDecoder()
-        let frac = ISO8601DateFormatter()
-        frac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
+        // Never throw: one odd date must not drop a whole event (e.g. a cancel).
         d.dateDecodingStrategy = .custom { dec in
             let s = try dec.singleValueContainer().decode(String.self)
-            // Never throw: one odd date must not drop a whole event (e.g. a cancel).
-            return frac.date(from: s) ?? plain.date(from: s) ?? .distantPast
+            return parseDate(s) ?? .distantPast
         }
         return d
     }()
+
+    /// RFC 3339 with or without fractional seconds (Go's time.Time encoding).
+    static func parseDate(_ s: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: s)
+    }
 }
 
 // MARK: - Paths (mirror internal/paths)
