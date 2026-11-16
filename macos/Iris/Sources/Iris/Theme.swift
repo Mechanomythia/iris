@@ -186,10 +186,10 @@ struct HyButton: ButtonStyle {
     var small = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration, kind: kind, small: small)
+        HyButtonBody(configuration: configuration, kind: kind, small: small)
     }
 
-    private struct Body: View {
+    struct HyButtonBody: View {
         let configuration: Configuration
         let kind: Kind
         let small: Bool
