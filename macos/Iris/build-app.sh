@@ -23,6 +23,8 @@ echo "==> Swift app (universal)"
 BIN=$(cd macos/Iris && swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
 cp "$BIN/Iris" "$APP/Contents/MacOS/Iris"
 sed "s/<string>0.1.0<\/string>/<string>$VERSION<\/string>/" macos/Iris/Info.plist > "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources/Fonts"
+cp macos/Iris/Fonts/*.ttf macos/Iris/Fonts/OFL-*.txt "$APP/Contents/Resources/Fonts/"
 
 echo "==> Sign"
 IDENTITY=${CODESIGN_IDENTITY:--}   # "-" = ad-hoc; set to "Developer ID Application: ..." for distribution

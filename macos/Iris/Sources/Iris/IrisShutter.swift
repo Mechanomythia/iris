@@ -51,10 +51,13 @@ struct IrisGeometry {
     }
 }
 
-/// Animated, shaded iris for the approval panel.
+/// The iris in hyad's language: flat sky-ramp blades with neatline seams,
+/// a thin ring with chart ticks, and light only as an event: when access is
+/// granted, the aperture shows a flat class-A disc with its halo.
 struct IrisShutter: View, Animatable {
     var openness: Double
     var granted: Bool = false
+    var denied: Bool = false
     var blades: Int = 12
 
     var animatableData: Double {
@@ -82,57 +85,62 @@ struct IrisShutter: View, Animatable {
 
     private func layout(_ size: CGSize) -> Layout {
         let side: CGFloat = min(size.width, size.height)
-        let ring: CGFloat = side * 0.07
+        let ring: CGFloat = max(2, side * 0.05)
         let r: CGFloat = side / 2 - ring
         let c = CGPoint(x: size.width / 2, y: size.height / 2)
         let disc = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
         return Layout(c: c, r: r, ring: ring, side: side, disc: disc)
     }
 
+    private func circle(_ c: CGPoint, _ r: CGFloat) -> Path {
+        Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+    }
+
     private func render(_ ctx: inout GraphicsContext, size: CGSize) {
         let L = layout(size)
-        drawBackground(&ctx, L)
+        drawLight(&ctx, L)
         drawBlades(&ctx, L)
         drawRing(&ctx, L)
     }
 
-    private func drawBackground(_ ctx: inout GraphicsContext, _ L: Layout) {
-        let glow: Color = granted ? Color(red: 0.25, green: 0.85, blue: 0.55) : Color(white: 0.25)
-        let gradient = Gradient(colors: [glow.opacity(0.9), Color.black])
-        let shading = GraphicsContext.Shading.radialGradient(gradient, center: L.c, startRadius: 0, endRadius: L.r)
-        ctx.fill(L.disc, with: shading)
+    /// Behind the blades: sky, or (granted) a flat lit disc plus halo.
+    private func drawLight(_ ctx: inout GraphicsContext, _ L: Layout) {
+        ctx.fill(L.disc, with: .color(Hy.sky))
+        guard granted else { return }
+        ctx.fill(L.disc, with: .color(Hy.classA.opacity(Hy.halo)))
+        ctx.fill(circle(L.c, L.r * 0.5), with: .color(Hy.classA))
     }
 
     private func drawBlades(_ ctx: inout GraphicsContext, _ L: Layout) {
         let g = IrisGeometry(center: L.c, radius: L.r, openness: CGFloat(openness), count: blades)
         var l = ctx
         l.clip(to: L.disc)
-        let start = CGPoint(x: L.c.x - L.r, y: L.c.y + L.r)
-        let end = CGPoint(x: L.c.x + L.r, y: L.c.y - L.r)
         for i in 0..<blades {
-            let shade: Double = 0.50 + 0.18 * sin(Double(i) * 1.7)
-            let gradient = Gradient(colors: [Color(white: shade + 0.2), Color(white: shade - 0.12)])
-            l.fill(Path(g.blade(i)), with: .linearGradient(gradient, startPoint: start, endPoint: end))
+            let fill: Color = i % 2 == 0 ? Hy.skyHigh : Hy.skyRaised
+            l.fill(Path(g.blade(i)), with: .color(fill))
         }
-        let seamWidth: CGFloat = max(1, L.side / 140)
+        let seam: CGFloat = max(0.75, L.side / 160)
         for i in 0..<blades {
-            l.stroke(Path(g.edge(i)), with: .color(.black.opacity(0.6)), lineWidth: seamWidth)
+            l.stroke(Path(g.edge(i)), with: .color(Hy.neatlineStrong.opacity(0.7)), lineWidth: seam)
         }
-        l.stroke(L.disc, with: .color(.black.opacity(0.5)), lineWidth: L.side / 40) // inner shadow
     }
 
     private func drawRing(_ ctx: inout GraphicsContext, _ L: Layout) {
+        let edge: Color = denied ? Hy.classM : Hy.neatlineStrong
         let mid: CGFloat = L.r + L.ring / 2
-        let ringRect = CGRect(x: L.c.x - mid, y: L.c.y - mid, width: 2 * mid, height: 2 * mid)
-        let metal = Gradient(colors: [Color(white: 0.75), Color(white: 0.35), Color(white: 0.8), Color(white: 0.3), Color(white: 0.75)])
-        ctx.stroke(Path(ellipseIn: ringRect), with: .conicGradient(metal, center: L.c), lineWidth: L.ring)
-        let bolt: CGFloat = L.ring * 0.32
-        for k in 0..<blades {
-            let a: CGFloat = CGFloat(k) / CGFloat(blades) * 2 * .pi
-            let p = CGPoint(x: L.c.x + mid * cos(a), y: L.c.y + mid * sin(a))
-            let rect = CGRect(x: p.x - bolt / 2, y: p.y - bolt / 2, width: bolt, height: bolt)
-            ctx.fill(Path(ellipseIn: rect), with: .color(Color(white: 0.2)))
+        var band = circle(L.c, L.r + L.ring)
+        band.addPath(L.disc)
+        ctx.fill(band, with: .color(Hy.skyRaised), style: FillStyle(eoFill: true))
+        ctx.stroke(circle(L.c, L.r), with: .color(edge), lineWidth: 1)
+        ctx.stroke(circle(L.c, L.r + L.ring - 0.5), with: .color(Hy.neatline), lineWidth: 1)
+        // Chart ticks at the cardinal points.
+        var ticks = Path()
+        for k in 0..<4 {
+            let a: CGFloat = CGFloat(k) * .pi / 2
+            ticks.move(to: CGPoint(x: L.c.x + (mid - L.ring * 0.35) * cos(a), y: L.c.y + (mid - L.ring * 0.35) * sin(a)))
+            ticks.addLine(to: CGPoint(x: L.c.x + (mid + L.ring * 0.35) * cos(a), y: L.c.y + (mid + L.ring * 0.35) * sin(a)))
         }
+        ctx.stroke(ticks, with: .color(edge), lineWidth: 1)
     }
 }
 
@@ -142,11 +150,12 @@ final class ShutterModel: ObservableObject {
     @Published var openness: Double = 0
     @Published var granted = false
     @Published var shake: CGFloat = 0
+    @Published var denied = false
 
     /// Opens the iris, then calls `done` once the animation has played.
     func open(then done: @escaping @MainActor () -> Void) {
         granted = true
-        withAnimation(.easeInOut(duration: 0.75)) { openness = 1 }
+        withAnimation(.easeOut(duration: 0.7)) { openness = 1 }
         after(0.95, done)
     }
 
@@ -159,6 +168,7 @@ final class ShutterModel: ObservableObject {
 
     /// Stays shut with a short "clunk".
     func deny(then done: @escaping @MainActor () -> Void) {
+        denied = true
         withAnimation(.easeOut(duration: 0.08)) { openness = 0.06 }
         after(0.08) {
             withAnimation(.spring(response: 0.18, dampingFraction: 0.35)) { self.openness = 0; self.shake += 1 }

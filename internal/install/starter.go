@@ -9,7 +9,7 @@ approval:
   timeout: 60s               # unanswered prompt = deny
   options: [once, 15m, 1h, session]   # buttons, shortest first (first is the default)
   sessionMax: 8h             # cap for "until session end"
-  touchID: false             # require Touch ID in Iris.app before granting
+  touchID: true              # Iris.app asks for Touch ID before allowing (fails closed without biometrics/password)
 
 proxy:
   enabled: false             # header-injecting egress proxy for curl / HTTP APIs

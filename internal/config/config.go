@@ -125,7 +125,7 @@ func Default() *Config {
 			Timeout:    Duration{60 * time.Second},
 			Options:    []string{"once", "15m", "1h", "session"},
 			SessionMax: Duration{8 * time.Hour},
-			TouchID:    false,
+			TouchID:    true,
 		},
 		Proxy: Proxy{Enabled: false, Listen: "127.0.0.1:18899"},
 	}

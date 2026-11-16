@@ -5,6 +5,10 @@ import SwiftUI
 struct IrisApp: App {
     @StateObject private var state = AppState()
 
+    init() {
+        Hy.registerFonts()
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuContent().environmentObject(state)
@@ -21,118 +25,205 @@ struct IrisApp: App {
     }
 }
 
+// MARK: - Menu
+
 struct MenuContent: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Hy.s4) {
             header
-            Divider()
-            grantsSection
-            Divider()
-            recentSection
-            Divider()
+            grantsPlate
+            recentPlate
             actions
         }
-        .padding(14)
+        .padding(Hy.s4)
         .frame(width: 380)
+        .background(Hy.sky)
+        .environment(\.colorScheme, .dark)
         .onAppear { state.refresh() }
     }
 
+    // MARK: header
+
     private var header: some View {
-        HStack {
-            Circle().fill(state.connected ? Color.green : Color.red).frame(width: 8, height: 8)
-            Text(state.connected ? "Broker running" : "Broker not reachable")
-                .font(.headline)
+        HStack(alignment: .center, spacing: Hy.s3) {
+            IrisShutter(openness: state.activeGrantCount > 0 ? 0.55 : 0, granted: state.activeGrantCount > 0, blades: 9)
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("iris")
+                    .font(Hy.display(22, 400))
+                    .foregroundStyle(Hy.starlight)
+                HStack(spacing: Hy.s1) {
+                    StarGlyph(state: state.connected ? .live : .failed, size: 12)
+                    Text(state.connected ? "Broker running" : "Broker not reachable")
+                        .font(Hy.ui(12.5))
+                        .foregroundStyle(state.connected ? Hy.dust : Hy.classM)
+                }
+            }
             Spacer()
-            if let v = state.status?.version { Text("v\(v)").font(.caption).foregroundStyle(.secondary) }
+            if let v = state.status?.version {
+                Text("v\(v)").font(Hy.mono(11)).foregroundStyle(Hy.faint)
+            }
         }
     }
 
-    private var grantsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Active grants").font(.subheadline.weight(.semibold))
-                Spacer()
-                Button("Revoke all") { state.revoke(nil) }
-                    .disabled(state.grants.isEmpty)
-                    .tint(.red)
-            }
+    // MARK: grants
+
+    private var grantsPlate: some View {
+        Plate(title: "Active grants",
+              caption: state.grants.isEmpty ? nil : "\(state.grants.count)",
+              trailing: state.grants.isEmpty ? nil : AnyView(
+                  Button("Revoke all") { state.revoke(nil) }
+                      .buttonStyle(HyButton(kind: .danger, small: true))
+              )) {
             if state.grants.isEmpty {
-                Text("None. Claude must ask before using any credential.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(state.grants) { g in
-                HStack {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("\(g.tool) · \(g.target)\(g.scope.isEmpty ? "" : " · " + g.scope)")
-                            .font(.callout)
-                        if let p = g.profile, !p.isEmpty {
-                            Text(p).font(.caption2).foregroundStyle(.secondary)
-                        }
-                        Text("\(g.option) · \(g.uses) use\(g.uses == 1 ? "" : "s") · expires \(g.expiresAt, style: .relative)")
-                            .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: Hy.s2) {
+                    StarGlyph(state: .stopped, size: 12)
+                    Text("None. Claude asks before using any credential.")
+                        .font(Hy.ui(12.5))
+                        .foregroundStyle(Hy.dust)
+                }
+                .padding(Hy.s4)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(state.grants.enumerated()), id: \.element.id) { i, g in
+                        if i > 0 { Neatline() }
+                        GrantRow(grant: g) { state.revoke(g.id) }
                     }
-                    Spacer()
-                    Button {
-                        state.revoke(g.id)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Revoke")
                 }
             }
         }
     }
 
-    private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Recent").font(.subheadline.weight(.semibold))
+    // MARK: recent
+
+    private var recentPlate: some View {
+        Plate(title: "Recent", caption: state.recent.isEmpty ? nil : "audit log") {
             if state.recent.isEmpty {
-                Text("No activity yet").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(state.recent.prefix(6), id: \.self) { e in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(e.time, style: .time).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    Text(e.event).font(.caption.weight(.medium)).foregroundStyle(color(e.event))
-                    Text([e.tool, e.target].compactMap { $0 }.joined(separator: "/"))
-                        .font(.caption).lineLimit(1)
+                Text("No activity yet.")
+                    .font(Hy.ui(12.5))
+                    .foregroundStyle(Hy.dust)
+                    .padding(Hy.s4)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(state.recent.prefix(6).enumerated()), id: \.offset) { i, e in
+                        if i > 0 { Neatline() }
+                        AuditRow(entry: e)
+                    }
                 }
             }
         }
     }
+
+    // MARK: actions
 
     private var actions: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Hy.s3) {
             if let err = state.lastError, state.connected {
-                Text(err).font(.caption).foregroundStyle(.red)
+                HStack(alignment: .top, spacing: Hy.s2) {
+                    StarGlyph(state: .failed, size: 12).padding(.top, 3)
+                    Text(err).font(Hy.ui(12)).foregroundStyle(Hy.dust)
+                }
             }
-            HStack {
+            HStack(spacing: Hy.s2) {
                 Button("Set up Claude Code") { state.runCLI(["install", "--detect"], title: "iris install") }
+                    .buttonStyle(HyButton(kind: .primary, small: true))
                 Button("Doctor") { state.runCLI(["doctor"], title: "iris doctor") }
+                    .buttonStyle(HyButton(kind: .secondary, small: true))
+                Spacer()
             }
-            HStack {
-                Button("Claude profiles") { state.runCLI(["claude", "detect"], title: "Claude config dirs") }
-                Button("Install `iris` command") { state.runCLI(["link", "--add-to-path"], title: "iris link") }
-            }
-            HStack {
-                Button("Edit config") { state.openConfig() }
+            HStack(spacing: Hy.s1) {
+                Button("Profiles") { state.runCLI(["claude", "detect"], title: "Claude config dirs") }
+                Button("Install CLI") { state.runCLI(["link", "--add-to-path"], title: "iris link") }
+                Button("Config") { state.openConfig() }
                 Button("Audit log") { state.openAuditLog() }
             }
+            .buttonStyle(HyButton(kind: .quiet, small: true))
+
+            Neatline()
+
             Toggle("Launch at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
-                .toggleStyle(.checkbox)
-            Button("Quit Iris") { NSApp.terminate(nil) }
-                .help("The broker keeps running; prompts fall back to a basic dialog.")
+                .toggleStyle(HyToggle(onLabel: "On", offLabel: "Off"))
+
+            HStack {
+                Text("The broker keeps running when Iris quits.")
+                    .font(Hy.ui(11.5))
+                    .foregroundStyle(Hy.faint)
+                Spacer()
+                Button("Quit") { NSApp.terminate(nil) }
+                    .buttonStyle(HyButton(kind: .quiet, small: true))
+            }
         }
     }
+}
 
-    private func color(_ event: String) -> Color {
-        switch event {
-        case "deny", "timeout", "error": return .red
-        case "grant": return .orange
-        case "issue", "proxy-inject": return .green
-        default: return .secondary
+// MARK: - Rows
+
+struct GrantRow: View {
+    let grant: GrantInfo
+    let revoke: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Hy.s3) {
+            StarGlyph(state: .live, size: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Hy.s2) {
+                    Text(grant.tool).font(Hy.ui(13.5, 600)).foregroundStyle(Hy.starlight)
+                    if !grant.scope.isEmpty { HyTag(text: grant.scope) }
+                    if let p = grant.profile, !p.isEmpty { HyTag(text: p, kind: .a) }
+                }
+                Text(grant.target)
+                    .font(Hy.mono(11.5))
+                    .foregroundStyle(Hy.dust)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("\(grant.option) · \(grant.uses) use\(grant.uses == 1 ? "" : "s") · expires \(grant.expiresAt, style: .relative)")
+                    .font(Hy.mono(10.5))
+                    .foregroundStyle(Hy.faint)
+            }
+            Spacer(minLength: Hy.s2)
+            Button("Revoke", action: revoke)
+                .buttonStyle(HyButton(kind: .quiet, small: true))
+                .opacity(hover ? 1 : 0.6)
+        }
+        .padding(.horizontal, Hy.s4)
+        .padding(.vertical, Hy.s3)
+        .background(hover ? Hy.skyHigh : .clear)
+        .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hover = h } }
+    }
+}
+
+struct AuditRow: View {
+    let entry: AuditEntry
+
+    var body: some View {
+        HStack(spacing: Hy.s3) {
+            Text(entry.time, format: .dateTime.hour().minute())
+                .font(Hy.mono(11))
+                .foregroundStyle(Hy.faint)
+                .frame(width: 38, alignment: .leading)
+            HyTag(text: entry.event, kind: kind)
+                .frame(width: 70, alignment: .leading)
+            Text([entry.tool, entry.target].compactMap { $0 }.joined(separator: " · "))
+                .font(Hy.mono(11.5))
+                .foregroundStyle(Hy.dust)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Hy.s4)
+        .frame(height: 30)
+    }
+
+    /// Colour is state: issued = live (A), granted = pending light (G), denied/failed = M.
+    private var kind: HyTag.Kind {
+        switch entry.event {
+        case "issue", "proxy-inject": return .a
+        case "grant": return .g
+        case "deny", "timeout", "error": return .m
+        default: return .plain
         }
     }
 }
