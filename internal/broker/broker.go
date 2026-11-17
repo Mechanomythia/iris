@@ -19,7 +19,8 @@ import (
 	"github.com/mechanomythia/iris/internal/secrets"
 )
 
-const Version = "0.1.0"
+// Version is stamped at build time: -ldflags "-X github.com/mechanomythia/iris/internal/broker.Version=…".
+var Version = "dev"
 
 // ErrDenied is returned to the helper when the human says no or does not answer.
 var ErrDenied = errors.New("denied by user")

@@ -1,10 +1,10 @@
 PREFIX ?= $(HOME)/.local
-VERSION ?= 0.1.0
+VERSION ?= 0.2.0
 
 .PHONY: build test vet install app clean
 
 build:
-	go build -o bin/ ./cmd/...
+	go build -ldflags "-X github.com/mechanomythia/iris/internal/broker.Version=$(VERSION)" -o bin/ ./cmd/...
 
 test:
 	go test -race ./...
