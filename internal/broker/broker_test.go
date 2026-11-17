@@ -66,7 +66,9 @@ func start(t *testing.T) *env {
 
 func (e *env) cred(t *testing.T, tool, target string) *protocol.Response {
 	t.Helper()
-	r, err := protocol.Call(e.brokerS, protocol.Request{Op: "credential", Tool: tool, Target: target, PID: 1, Cwd: "/x"}, 5*time.Second)
+	// Generous client deadline: the timeout case waits for the 2s approval
+	// timeout, and loaded CI runners add seconds on top.
+	r, err := protocol.Call(e.brokerS, protocol.Request{Op: "credential", Tool: tool, Target: target, PID: 1, Cwd: "/x"}, 20*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -365,7 +365,8 @@ func describeRoles(m map[string][]string) string {
 	return strings.Join(parts, "; ")
 }
 
-func openURL(u string) {
+// openURL opens a page in the browser; swapped out in tests.
+var openURL = func(u string) {
 	opener := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		opener = "open"

@@ -15,7 +15,9 @@ func TestCloudWizardNoCreate(t *testing.T) {
 	var clip []string
 	old := copyClip
 	copyClip = func(s string) bool { clip = append(clip, s); return true }
-	t.Cleanup(func() { copyClip = old })
+	oldOpen := openURL
+	openURL = func(string) {} // never launch a browser from tests
+	t.Cleanup(func() { copyClip = old; openURL = oldOpen })
 
 	answers := strings.Join([]string{
 		"acme-api",                                 // name
