@@ -42,6 +42,13 @@ final class AppState: ObservableObject {
             }
             panels[id] = c
             c.show()
+            // Like 1Password: Touch ID is armed right away, touch = allow once.
+            if ev.touchID == true, let first = ev.options?.first {
+                let who = ev.profile.map { "Claude (\($0))" } ?? "Claude"
+                c.armTouchID(reason: "allow \(who) to use \(ev.label ?? "a credential") once") { [weak self] in
+                    self?.decide(ev, choice: first.name, authenticated: true)
+                }
+            }
         case "cancel":
             if let id = ev.id, let p = panels.removeValue(forKey: id) { p.close() }
         case "grants_changed":
@@ -51,9 +58,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func decide(_ ev: BrokerEvent, choice: String) {
+    private func decide(_ ev: BrokerEvent, choice: String, authenticated: Bool = false) {
         guard let id = ev.id else { return }
         let panel = panels[id]
+        if !authenticated { panel?.disarmTouchID() }
         let send: @MainActor (String) -> Void = { [weak self] c in
             self?.subscription.send(["op": "decision", "id": id, "choice": c])
             self?.panels.removeValue(forKey: id)?.close()
@@ -68,7 +76,7 @@ final class AppState: ObservableObject {
         }
 
         if choice == "deny" { return deny() }
-        guard ev.touchID == true else { return grant() }
+        guard ev.touchID == true, !authenticated else { return grant() }
 
         let ctx = LAContext()
         var err: NSError?

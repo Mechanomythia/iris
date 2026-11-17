@@ -125,7 +125,13 @@ type Identity struct {
 	Username      string `yaml:"username,omitempty"`      // git / docker (default x-access-token)
 	Header        string `yaml:"header,omitempty"`        // http: header to inject (default Authorization)
 	ValueTemplate string `yaml:"valueTemplate,omitempty"` // http: e.g. "Bearer {{token}}" (default)
-	Note          string `yaml:"note,omitempty"`
+	// http: headers removed before forwarding (e.g. the placeholder
+	// PRIVATE-TOKEN a CLI sends when it thinks it's logged in).
+	RemoveHeaders []string `yaml:"removeHeaders,omitempty"`
+	// http: variables set in Claude's sandbox so the CLI believes it is
+	// logged in (placeholders only; the proxy injects the real token).
+	SandboxEnv map[string]string `yaml:"sandboxEnv,omitempty"`
+	Note       string            `yaml:"note,omitempty"`
 }
 
 // Source is exactly one of the fields.
@@ -299,6 +305,16 @@ func (c *Config) Resolve(tool, target string) (Identity, bool) {
 }
 
 func (c *Config) PassthroughEnabled(tool string) bool { return contains(c.Passthrough.Tools, tool) }
+
+// HTTPHosts are the hosts the proxy injects credentials for (and the only
+// names the iris CA may issue certificates for).
+func (c *Config) HTTPHosts() []string {
+	var out []string
+	for _, id := range c.ByTool(ToolHTTP) {
+		out = append(out, id.Target)
+	}
+	return out
+}
 
 // Uses reports whether Claude should be wired up for a tool at all.
 func (c *Config) Uses(tool string) bool {

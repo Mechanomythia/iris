@@ -12,6 +12,8 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,17 +27,50 @@ type CA struct {
 	leafs map[string]*tls.Certificate
 }
 
-// EnsureCA loads or creates a CA at certPath/keyPath (key mode 0600).
-func EnsureCA(certPath, keyPath string) (*CA, error) {
-	if _, err := os.Stat(certPath); errors.Is(err, os.ErrNotExist) {
-		if err := generateCA(certPath, keyPath); err != nil {
-			return nil, err
-		}
+// EnsureCA loads or creates a CA at certPath/keyPath (key mode 0600). The
+// CA is name-constrained to hosts (the http identities): even if its key
+// leaked, or it's trusted in the login keychain (iris ca trust), it can't
+// impersonate any other site. A changed host list regenerates it
+// (changed = true: trust it again and restart the broker).
+func EnsureCA(certPath, keyPath string, hosts []string) (ca *CA, changed bool, err error) {
+	want := normHosts(hosts)
+	if c, err := LoadCA(certPath, keyPath); err == nil && sameHosts(c.cert.PermittedDNSDomains, want) && c.cert.PermittedDNSDomainsCritical {
+		return c, false, nil
 	}
-	return LoadCA(certPath, keyPath)
+	if err := generateCA(certPath, keyPath, want); err != nil {
+		return nil, false, err
+	}
+	c, err := LoadCA(certPath, keyPath)
+	return c, true, err
 }
 
-func generateCA(certPath, keyPath string) error {
+func normHosts(hosts []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimPrefix(h, "*."))
+		if h != "" && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		out = []string{"iris.invalid"} // no injected hosts: valid for nothing
+	}
+	return out
+}
+
+func sameHosts(a, b []string) bool {
+	a = append([]string(nil), a...)
+	sort.Strings(a)
+	return strings.Join(a, ",") == strings.Join(b, ",")
+}
+
+// CommonNamePrefix identifies iris CAs (iris ca trust removes older ones).
+const CommonNamePrefix = "Iris credential proxy CA"
+
+func generateCA(certPath, keyPath string, hosts []string) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -44,13 +79,16 @@ func generateCA(certPath, keyPath string) error {
 	host, _ := os.Hostname()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Iris credential proxy CA (" + host + ")", Organization: []string{"Iris local"}},
+		Subject:               pkix.Name{CommonName: CommonNamePrefix + " (" + host + ")", Organization: []string{"Iris local"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(5, 0, 0),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		MaxPathLenZero:        true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		// Valid only for the injected hosts (and their subdomains).
+		PermittedDNSDomainsCritical: true,
+		PermittedDNSDomains:         hosts,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -89,6 +127,9 @@ func LoadCA(certPath, keyPath string) (*CA, error) {
 	}
 	return &CA{cert: cert, key: key, leafs: map[string]*tls.Certificate{}}, nil
 }
+
+// Hosts the CA may issue for.
+func (ca *CA) Hosts() []string { return ca.cert.PermittedDNSDomains }
 
 func (ca *CA) CertPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw})

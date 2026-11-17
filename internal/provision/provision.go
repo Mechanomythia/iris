@@ -471,3 +471,51 @@ func sanitize(s string) string {
 	}
 	return strings.Trim(b.String(), "-")
 }
+
+// ---------------- GitLab (glab, API) ----------------
+
+type GitLabOptions struct {
+	Host  string // gitlab.com or your instance
+	Paste bool   // store a pasted token in the Keychain instead of reading glab's
+	In    io.Reader
+}
+
+// GitLab lets glab (and curl to the API) work in the sandbox with YOUR
+// token, which never enters it: glab gets a placeholder GITLAB_TOKEN, and
+// the iris proxy replaces the PRIVATE-TOKEN header it sends with
+// "Authorization: Bearer <your token>" (accepted for personal access and
+// OAuth tokens). The token is read on your Mac, after approval, from glab's
+// own store (glab config get token), or from the Keychain with --paste.
+func GitLab(ctx context.Context, r *Runner, o GitLabOptions) (config.Identity, error) {
+	def(&o.Host, "gitlab.com")
+	id := config.Identity{
+		Tool: config.ToolHTTP, Target: o.Host, Scope: "GitLab API (your token)",
+		Header: "Authorization", ValueTemplate: "Bearer {{token}}",
+		RemoveHeaders: []string{"PRIVATE-TOKEN", "JOB-TOKEN"},
+		SandboxEnv:    map[string]string{"GITLAB_TOKEN": "iris-injects-the-real-token", "GITLAB_HOST": o.Host},
+		Note:          "provisioned by iris: glab in the sandbox uses a placeholder token; the proxy injects yours",
+	}
+	if o.Paste {
+		id.Source = config.Source{Keychain: &config.Keychain{Service: "iris", Account: "http/" + o.Host}}
+		if r.DryRun {
+			fmt.Fprintf(r.Out, "  (dry-run) would store the pasted token in Keychain service=iris account=http/%s\n", o.Host)
+			return id, nil
+		}
+		tok, err := readSecret(o.In, r.Out, "GitLab token for "+o.Host+" (input hidden): ")
+		if err != nil {
+			return id, err
+		}
+		return id, secrets.StoreKeychain(ctx, "iris", "http/"+o.Host, tok)
+	}
+	id.Source = config.Source{Command: []string{"glab", "config", "get", "token", "--host", o.Host}}
+	if r.DryRun {
+		fmt.Fprintf(r.Out, "  (dry-run) would read your token with: glab config get token --host %s\n", o.Host)
+		return id, nil
+	}
+	out, err := r.Query(ctx, "glab", "config", "get", "token", "--host", o.Host)
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return id, fmt.Errorf("glab has no token for %s here (run `glab auth login --hostname %s`, or use --paste with a personal access token): %v", o.Host, o.Host, err)
+	}
+	fmt.Fprintf(r.Out, "  glab has a token for %s; iris will read it after each approval\n", o.Host)
+	return id, nil
+}

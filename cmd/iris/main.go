@@ -38,6 +38,7 @@ Setup
   iris uninstall [--claude-dir D] [--purge] revert what install did (one dir or all)
   iris passthrough on|off|status [tools]    let Claude use YOUR credentials, approved per use
   iris network on|off|status|allow|forget   iris as the sandbox's network gate (ask for unknown hosts)
+  iris ca trust|untrust|status              trust the (name-constrained) iris CA for Go tools like glab
   iris claude list|detect|add|remove        manage Claude config dirs (aliases with CLAUDE_CONFIG_DIR)
   iris cloud new|show|list                  set up a Claude Code cloud environment (claude.ai/code)
   iris link [--dir ~/.local/bin]            put iris on your PATH (symlink)
@@ -117,6 +118,8 @@ func main() {
 		err = cmdCloud(args)
 	case "network":
 		err = cmdNetwork(args)
+	case "ca":
+		err = cmdCA(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -316,7 +319,7 @@ func cmdDaemon(args []string) error {
 	}
 
 	if cfg.Proxy.Enabled {
-		ca, err := proxy.EnsureCA(paths.CACert(), paths.CAKey())
+		ca, _, err := proxy.EnsureCA(paths.CACert(), paths.CAKey(), cfg.HTTPHosts())
 		if err != nil {
 			return fmt.Errorf("proxy CA: %w", err)
 		}
@@ -545,6 +548,7 @@ const provisionUsage = `iris provision <kind> [flags]   (run from YOUR terminal,
   gcp     service account + roles; broker mints tokens by impersonation
   aws     IAM role + policies; broker mints creds with sts assume-role
   github  pre-filled fine-grained PAT page; token stored in Keychain
+  gitlab  glab + GitLab API with your token (read from glab, injected by the proxy)
   secret  store any token in Keychain (e.g. an API key for the proxy)
 
 Common flags: --dry-run (print commands only), --no-install (don't re-run iris install)
@@ -628,6 +632,19 @@ func cmdProvision(args []string) error {
 			return err
 		}
 		ids = append(ids, got...)
+	case "gitlab":
+		o := provision.GitLabOptions{}
+		fs.StringVar(&o.Host, "host", "gitlab.com", "GitLab host")
+		fs.BoolVar(&o.Paste, "paste", false, "store a pasted token in the Keychain instead of reading glab's")
+		_ = fs.Parse(args)
+		r.DryRun = *dry
+		fmt.Println("Setting up GitLab (glab + API) with your token, injected by the proxy:")
+		id, err := provision.GitLab(ctx, r, o)
+		if err != nil {
+			return err
+		}
+		ids = append(ids, id)
+		fmt.Println("  next: iris ca trust (glab is a Go tool and only trusts your keychain), then iris restart")
 	case "secret":
 		o := provision.SecretOptions{}
 		fs.StringVar(&o.Tool, "tool", "http", "tool: http, git, docker, kube")

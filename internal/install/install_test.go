@@ -337,3 +337,26 @@ func TestStarterConfigIsValid(t *testing.T) {
 		t.Fatal("http has no passthrough")
 	}
 }
+
+func TestPlaceholderEnvNotDenied(t *testing.T) {
+	t.Setenv("IRIS_HOME", t.TempDir())
+	cfg := config.Default()
+	cfg.Proxy.Enabled = true
+	cfg.Identities = []config.Identity{{Tool: "http", Target: "gitlab.com", Source: config.Source{Static: "x"},
+		SandboxEnv: map[string]string{"GITLAB_TOKEN": "iris-injects-the-real-token"}}}
+	d := Doc{}
+	if err := Plan(&Editor{D: d, M: &Manifest{}}, cfg, Options{IrisBin: "/i", HelperBin: "/h"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(d)
+	s := string(b)
+	if !strings.Contains(s, `"GITLAB_TOKEN":"iris-injects-the-real-token"`) {
+		t.Fatal("placeholder not set")
+	}
+	if strings.Contains(s, `{"mode":"deny","name":"GITLAB_TOKEN"}`) {
+		t.Fatal("placeholder would be unset by the deny list")
+	}
+	if !strings.Contains(s, `{"mode":"deny","name":"GITHUB_TOKEN"}`) {
+		t.Fatal("other secrets must still be denied")
+	}
+}

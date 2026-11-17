@@ -73,7 +73,17 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	for _, f := range DenyFiles {
 		try(add("sandbox.credentials.files", map[string]any{"path": f, "mode": "deny"}))
 	}
+	// Placeholders iris sets for http identities must not be unset again.
+	placeholders := map[string]string{}
+	for _, id := range cfg.ByTool(config.ToolHTTP) {
+		for k, v := range id.SandboxEnv {
+			placeholders[k] = v
+		}
+	}
 	for _, v := range append(append([]string{}, DenyEnv...), o.ExtraEnvDeny...) {
+		if _, ok := placeholders[v]; ok {
+			continue
+		}
 		try(add("sandbox.credentials.envVars", map[string]any{"name": v, "mode": "deny"}))
 	}
 	// Claude's Read/Edit tools are not sandboxed: deny them separately.
@@ -161,6 +171,9 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 		env["GIT_SSL_CAINFO"] = b
 		env["AWS_CA_BUNDLE"] = b
 		env["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"] = b
+	}
+	for k, v := range placeholders {
+		env[k] = v
 	}
 	for k, v := range env {
 		try(set("env."+k, v))

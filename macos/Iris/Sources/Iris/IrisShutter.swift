@@ -1,4 +1,5 @@
 import AppKit
+import LocalAuthentication
 import SwiftUI
 
 /// Geometry for an aperture-style iris. Neighbouring blades meet along a
@@ -151,6 +152,8 @@ final class ShutterModel: ObservableObject {
     @Published var granted = false
     @Published var shake: CGFloat = 0
     @Published var denied = false
+    /// Armed Touch ID (embedded in the panel): touching the sensor allows once.
+    @Published var touchContext: LAContext?
 
     /// Opens the iris, then calls `done` once the animation has played.
     func open(then done: @escaping @MainActor () -> Void) {

@@ -25,6 +25,9 @@ func setup(t *testing.T, answer string) (*http.Client, *httptest.Server, *[]stri
 	var seen []string
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Header.Get("Authorization"))
+		if r.Header.Get("PRIVATE-TOKEN") != "" {
+			seen = append(seen, "LEAKED PRIVATE-TOKEN")
+		}
 		io.WriteString(w, "hello "+r.URL.Path)
 	}))
 	t.Cleanup(upstream.Close)
@@ -34,11 +37,12 @@ func setup(t *testing.T, answer string) (*http.Client, *httptest.Server, *[]stri
 	cfg.Proxy.Enabled = true
 	cfg.Proxy.AllowedHosts = []string{"allowed.example"}
 	// "api.test" is mapped to the upstream by the dialer below.
-	cfg.Identities = []config.Identity{{Tool: "http", Target: "api.test", Source: config.Source{Static: "s3cret"}}}
+	cfg.Identities = []config.Identity{{Tool: "http", Target: "api.test", Source: config.Source{Static: "s3cret"},
+		RemoveHeaders: []string{"PRIVATE-TOKEN"}}}
 	b := broker.New(cfg, "", audit.Open(filepath.Join(dir, "a.jsonl")))
 	b.Hub.Fallback = func(context.Context, approval.Request) (string, error) { return answer, nil }
 
-	ca, err := EnsureCA(filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca-key.pem"))
+	ca, _, err := EnsureCA(filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca-key.pem"), []string{"api.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +74,7 @@ func TestInjectsHeaderOverCONNECT(t *testing.T) {
 	client, _, seen := setup(t, "15m")
 	req, _ := http.NewRequest("GET", "https://api.test/v1/me", nil)
 	req.Header.Set("Authorization", "Bearer placeholder-from-sandbox")
+	req.Header.Set("PRIVATE-TOKEN", "iris-injects-the-real-token") // what glab sends
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)

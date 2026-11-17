@@ -264,6 +264,9 @@ func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostpor
 		}
 		// Whatever the sandbox sent for this header is replaced, so a
 		// placeholder like "Bearer iris" works and nothing leaks upstream.
+		for _, h := range id.RemoveHeaders {
+			out.Header.Del(h)
+		}
 		out.Header.Set(hdr, creds.HeaderValue(id, cred))
 		p.B.Audit.Write(audit.Entry{Event: "proxy-inject", Tool: config.ToolHTTP, Target: host, Detail: in.Method + " " + in.URL.Path})
 	}

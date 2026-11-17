@@ -111,3 +111,22 @@ func TestGitHubURL(t *testing.T) {
 		}
 	}
 }
+
+func TestGitLab(t *testing.T) {
+	r, calls, _ := fake(map[string]string{"glab config get token": "glpat-xyz\n"})
+	id, err := GitLab(context.Background(), r, GitLabOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Target != "gitlab.com" || id.ValueTemplate != "Bearer {{token}}" || id.RemoveHeaders[0] != "PRIVATE-TOKEN" ||
+		id.SandboxEnv["GITLAB_TOKEN"] == "" || strings.Join(id.Source.Command, " ") != "glab config get token --host gitlab.com" {
+		t.Fatalf("%+v", id)
+	}
+	if len(*calls) != 1 {
+		t.Fatal(*calls)
+	}
+	r2, _, _ := fake(map[string]string{"glab config get token": ""})
+	if _, err := GitLab(context.Background(), r2, GitLabOptions{Host: "git.acme.dev"}); err == nil || !strings.Contains(err.Error(), "glab auth login --hostname git.acme.dev") {
+		t.Fatalf("expected a helpful error, got %v", err)
+	}
+}

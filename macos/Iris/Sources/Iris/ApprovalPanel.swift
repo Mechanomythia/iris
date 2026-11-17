@@ -1,5 +1,17 @@
 import AppKit
+import LocalAuthentication
+import LocalAuthenticationEmbeddedUI
 import SwiftUI
+
+/// Touch ID drawn inside the panel (like 1Password): evaluating a policy on
+/// this view's context shows the sensor prompt here, not as a system sheet.
+struct TouchIDView: NSViewRepresentable {
+    let context: LAContext
+    func makeNSView(context _: Context) -> LAAuthenticationView {
+        LAAuthenticationView(context: context, controlSize: .regular)
+    }
+    func updateNSView(_: LAAuthenticationView, context _: Context) {}
+}
 
 /// Borderless panels can't become key by default; we need key for Return/Escape.
 final class KeyablePanel: NSPanel {
@@ -81,7 +93,39 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         shutter.deny(then: done)
     }
 
+    /// Arms the embedded Touch ID: a successful touch calls `onTouch`
+    /// (allow once). Returns false when there's no biometry (closed lid, no
+    /// sensor); the buttons then work as before.
+    @discardableResult
+    func armTouchID(reason: String, onTouch: @escaping @MainActor () -> Void) -> Bool {
+        let ctx = LAContext()
+        var err: NSError?
+        guard ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err) else { return false }
+        shutter.touchContext = ctx
+        // The view must be on screen with this context before evaluating.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard self.shutter.touchContext === ctx, !self.decided else { return }
+            ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, _ in
+                Task { @MainActor in
+                    guard self.shutter.touchContext === ctx else { return } // disarmed meanwhile
+                    self.shutter.touchContext = nil
+                    if ok { onTouch() } // failure/cancel: fall back to the buttons
+                }
+            }
+        }
+        return true
+    }
+
+    /// Cancels an armed Touch ID (another option was chosen, or Deny).
+    func disarmTouchID() {
+        guard let ctx = shutter.touchContext else { return }
+        shutter.touchContext = nil
+        ctx.invalidate()
+    }
+
     func close() {
+        disarmTouchID()
         decided = true
         guard let p = panel else { return }
         panel = nil
@@ -256,18 +300,28 @@ struct ApprovalView: View {
                 .foregroundStyle(remaining <= 10 ? Hy.classK : Hy.faint)
                 .padding(.leading, Hy.s1)
             Spacer()
-            if touchID {
-                Image(systemName: "touchid")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(Hy.dust)
-                    .help("Allowing asks for Touch ID")
-            }
-            // Longer options as secondary buttons, the shortest as primary on the right.
+            // Longer options as secondary buttons, the shortest on the right:
+            // with Touch ID armed it's the sensor itself (touch = allow once).
             ForEach(options.dropFirst(), id: \.self) { opt in
                 Button(opt.display) { onChoice(opt.name) }
                     .buttonStyle(HyButton(kind: .secondary))
             }
-            if let first = options.first {
+            if let ctx = shutter.touchContext, let first = options.first {
+                HStack(spacing: Hy.s2) {
+                    TouchIDView(context: ctx)
+                        .frame(width: 32, height: 32)
+                    Text(first.display == "Once" ? "Touch ID to allow once" : "Touch ID to allow \(first.display)")
+                        .font(Hy.ui(13, 600))
+                        .foregroundStyle(Hy.starlight)
+                }
+                .padding(.leading, Hy.s2)
+            } else if let first = options.first {
+                if touchID {
+                    Image(systemName: "touchid")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Hy.dust)
+                        .help("Allowing asks for Touch ID")
+                }
                 Button(first.display == "Once" ? "Allow once" : "Allow \(first.display)") { onChoice(first.name) }
                     .buttonStyle(HyButton(kind: .primary))
                     .keyboardShortcut(.defaultAction)

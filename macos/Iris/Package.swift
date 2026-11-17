@@ -15,6 +15,7 @@ let package = Package(
             path: "Sources/Iris",
             linkerSettings: [
                 .linkedFramework("LocalAuthentication"),
+                .linkedFramework("LocalAuthenticationEmbeddedUI"),
                 .linkedFramework("ServiceManagement"),
                 // Sparkle.framework ships in Iris.app/Contents/Frameworks.
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),

@@ -139,8 +139,13 @@ func Install(o InstallOptions) (*Result, error) {
 	st := LoadState()
 
 	if cfg.Proxy.Enabled && !o.DryRun {
-		if _, err := proxy.EnsureCA(paths.CACert(), paths.CAKey()); err != nil {
+		ca, changed, err := proxy.EnsureCA(paths.CACert(), paths.CAKey(), cfg.HTTPHosts())
+		if err != nil {
 			return nil, fmt.Errorf("creating proxy CA: %w", err)
+		}
+		if changed && len(cfg.HTTPHosts()) > 0 {
+			res.Warnings = append(res.Warnings, "the iris CA was (re)created for "+strings.Join(ca.Hosts(), ", ")+
+				": run `iris ca trust` (Go tools like glab and gh need it) and `iris restart`")
 		}
 	}
 
