@@ -219,6 +219,32 @@ Same threat model as the brief: a prompt injection or a confused agent. A compro
 5. **The proxy bypasses Claude's domain allowlist** (setting `httpProxyPort` does that). Fill `proxy.allowedHosts`.
 6. Grants live in memory: restarting the daemon revokes everything, by design.
 
+## Claude Code cloud environments: `iris cloud`
+
+Cloud sessions at claude.ai/code run in an *environment*: network access, environment variables, network secrets and a setup script. There's no API to create one, so `iris cloud new` prepares everything and walks you through the dialog:
+
+```bash
+iris cloud new my-repo
+```
+
+1. **Asks what Claude needs:** GitHub, Google Cloud, Firebase, GKE, Artifact Registry, AWS, a Docker registry, or HTTP APIs with a token, each with read or write access.
+2. **Creates dedicated identities** with your own gcloud/aws login: one GCP service account per environment (roles grouped across projects) plus a key, or an AWS IAM user with `ReadOnlyAccess` / `PowerUserAccess` plus an access key. For a Docker Hub or GHCR token it opens the pre-filled token page. `--dry-run` prints the commands; `--no-create` leaves placeholders.
+3. **Walks you through claude.ai/code** section by section: name, network access and allowed domains, environment variables, setup script, network secrets, and a first message that checks every credential. Each block lands on your clipboard; press Enter when you've pasted it. `iris cloud show <name>` repeats the walkthrough later; `--print` prints the guide.
+
+Where each credential goes, and why:
+
+| Kind | Where | Why |
+|---|---|---|
+| GitHub | nothing to add | Claude's GitHub proxy authenticates the repositories you attach to the session |
+| API tokens (OpenAI, Stripe, Cloudflare, …) | **Network secret** (host + header) | the proxy adds the header outside the VM; the token never enters it, and iris never sees it |
+| GCP / Firebase / GKE / Artifact Registry | service-account key in an env variable | GCP exchanges keys for tokens, which a static header can't do. A bootstrap installed by the setup script decodes the key on first use, through `BASH_ENV` |
+| AWS | access key in env variables | AWS signs every request (SigV4), so a static header can't work |
+| Docker Hub / GHCR | token in an env variable | the bootstrap runs `docker login` once dockerd is up |
+
+Environment variables are readable by everyone using the environment, so keep these environments personal and the identities narrow. The cloud VM can't reach your Mac to mint short-lived tokens, which is why these keys are long-lived and per environment: revoke the service account or IAM user and that environment loses access, nothing else. The setup script installs gcloud (adding `packages.cloud.google.com` to Allowed domains), AWS CLI v2, firebase-tools and kubectl only as needed. GKE needs the cluster's DNS-based endpoint (`*.gke.goog`); the guide tells you the command.
+
+Files land in `~/.config/iris/cloud/<name>/`: `guide.md` and `setup.sh` (no secrets), plus `secrets.json` (mode 0600).
+
 ## Auto-update
 
 Iris.app updates itself with [Sparkle](https://sparkle-project.org). Every 6 hours it checks `appcast.xml` on the latest GitHub release, then downloads and installs the update. The broker is restarted on the new version automatically. "Install updates automatically" and "Check for updates" are in the menu.

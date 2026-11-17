@@ -35,6 +35,7 @@ Setup
   iris uninstall [--claude-dir D] [--purge] revert what install did (one dir or all)
   iris passthrough on|off|status [tools]    let Claude use YOUR credentials, approved per use
   iris claude list|detect|add|remove        manage Claude config dirs (aliases with CLAUDE_CONFIG_DIR)
+  iris cloud new|show|list                  set up a Claude Code cloud environment (claude.ai/code)
   iris link [--dir ~/.local/bin]            put iris on your PATH (symlink)
   iris provision kube|gcp|aws|github|secret create a Claude-only identity (iris provision <kind> -h)
   iris doctor                               check the installation
@@ -108,6 +109,8 @@ func main() {
 		err = cmdRestart()
 	case "dev":
 		err = cmdDev(args)
+	case "cloud":
+		err = cmdCloud(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
