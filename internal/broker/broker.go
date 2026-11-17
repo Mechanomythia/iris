@@ -125,6 +125,7 @@ var toolWords = map[string][]string{
 	"git":    {"git", "gh"},
 	"docker": {"docker", "podman", "buildx"},
 	"http":   {"curl", "wget", "http", "gh"},
+	"ssh":    {"git", "ssh", "scp", "rsync", "sftp"},
 }
 
 // contextFor picks the most recent hook command (last 60s) from the same
@@ -298,6 +299,27 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		return nil, nil // revoked in between; loop re-prompts
 	}
 	return gg, nil
+}
+
+// ApproveUse gates a use that mints nothing on our side (an SSH signature
+// done by your own agent): same grants, prompt and audit as Credential.
+func (b *Broker) ApproveUse(ctx context.Context, tool, target, scope string, p ProcInfo) error {
+	cfg := b.Config()
+	id, ok := cfg.Resolve(tool, target)
+	if !ok {
+		b.Audit.Write(audit.Entry{Event: "error", Tool: tool, Target: target, PID: p.PID, Detail: "not enabled"})
+		return fmt.Errorf("iris: %s is not enabled (iris passthrough on %s)", tool, tool)
+	}
+	if scope != "" {
+		id.Scope = scope
+	}
+	g, err := b.ensureGrant(ctx, cfg, id, p)
+	if err != nil {
+		return err
+	}
+	b.Audit.Write(audit.Entry{Event: "issue", Tool: tool, Target: target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,
+		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Detail: "signed by your agent"})
+	return nil
 }
 
 // mint returns a cached credential or fetches a fresh one.

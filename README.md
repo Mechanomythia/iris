@@ -122,7 +122,10 @@ iris passthrough status
 | git | `git credential fill` with your helpers (osxkeychain, gh, manager), never prompting. SSH remotes are rewritten to HTTPS |
 | docker | your `credHelpers` / `credsStore` / `auths` |
 
+| ssh | iris serves an SSH agent to the sandbox and forwards approved sign requests to **your** agent (1Password by default, else `$SSH_AUTH_SOCK`). Covers commit signing and SSH logins (`git push` over SSH) |
+
 - Nothing runs on your side before you click Allow: no SSO browser tabs, no keychain prompts, no exec plugins.
+- **SSH and commit signing (1Password):** the sandbox never gets 1Password's socket or `~/.ssh`. Its `SSH_AUTH_SOCK` is the iris agent, which can list keys and sign, but only after the dialog, and refuses add, remove, lock and unlock. The popup says what's being signed: **Signature** (`signature:git`, a commit or tag) or **SSH login** (`login:git`), and shows the command (`git commit …`). In Claude's git config, `gpg.ssh.program` is the standard `ssh-keygen` instead of 1Password's `op-ssh-sign`, so signing goes through the agent. SSH remotes keep working, with no HTTPS rewrite, using a copy of your `known_hosts`. The first time, 1Password also asks whether irisd may use the key; let it remember that, and iris stays the per-use gate. Point `ssh.upstream` in the config at another agent if you don't use 1Password.
 - The context or profile name comes from inside the sandbox, so it's validated (no leading `-`, no spaces or newlines) and passed as `--context=` / `--profile=`, so it can't smuggle flags.
 - The audit log marks every passthrough issue `your credentials`. If the secret itself doesn't expire (static kube token, client cert, PAT), it also notes `long-lived`, because revoking the grant then stops iris handing it out but not a copy Claude already has.
 - After you add kube contexts or AWS profiles, re-run `iris install` so Claude sees them.

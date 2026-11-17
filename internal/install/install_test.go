@@ -285,8 +285,29 @@ func TestPassthroughConfigs(t *testing.T) {
 		t.Errorf("docker:\n%s", dc)
 	}
 	git, _ := os.ReadFile(paths.ClaudeGitconfig())
-	if !strings.Contains(string(git), "insteadOf = git@github.com:") {
+	// ssh passthrough on: signing via ssh-keygen + iris agent, SSH remotes kept.
+	if !strings.Contains(string(git), "[gpg \"ssh\"]\n\tprogram = ssh-keygen") || strings.Contains(string(git), "insteadOf") {
 		t.Errorf("git:\n%s", git)
+	}
+	s0, _ := os.ReadFile(paths.ClaudeSettings())
+	for _, w := range []string{paths.SSHAgentSocket(), `"SSH_AUTH_SOCK"`, "-F /dev/null -o IdentityAgent=", "UserKnownHostsFile=" + paths.ClaudeKnownHosts()} {
+		if !strings.Contains(string(s0), w) {
+			t.Errorf("settings missing %s", w)
+		}
+	}
+	if strings.Contains(string(s0), "1password") {
+		t.Error("the 1Password socket must never be allowed in the sandbox")
+	}
+
+	// ssh passthrough off: SSH remotes are rewritten to HTTPS again.
+	cfg.Passthrough.Tools = []string{"kube", "aws", "gcp", "git", "docker"}
+	config.Save(paths.ConfigFile(), cfg)
+	if _, err := Install(InstallOptions{Options: Options{IrisBin: "/b/iris", HelperBin: "/b/iris-helper"}, NoLaunchd: true}); err != nil {
+		t.Fatal(err)
+	}
+	git, _ = os.ReadFile(paths.ClaudeGitconfig())
+	if !strings.Contains(string(git), "insteadOf = git@github.com:") || strings.Contains(string(git), "gpg") {
+		t.Errorf("git without ssh:\n%s", git)
 	}
 	s, _ := os.ReadFile(paths.ClaudeSettings())
 	for _, w := range []string{"KUBECONFIG", "AWS_CONFIG_FILE", "CLOUDSDK_CONFIG", "GIT_CONFIG_GLOBAL", "DOCKER_CONFIG"} {
@@ -303,7 +324,7 @@ func TestStarterConfigIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Passthrough.Tools) != 5 || !c.Approval.TouchID {
+	if len(c.Passthrough.Tools) != 6 || !c.Approval.TouchID {
 		t.Fatalf("%+v", c)
 	}
 	if id, ok := c.Resolve("kube", "any-context"); !ok || !id.Source.Passthrough {

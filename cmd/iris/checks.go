@@ -16,6 +16,7 @@ import (
 	"github.com/mechanomythia/iris/internal/install"
 	"github.com/mechanomythia/iris/internal/paths"
 	"github.com/mechanomythia/iris/internal/protocol"
+	"github.com/mechanomythia/iris/internal/sshagent"
 )
 
 type checker struct{ fails, warns int }
@@ -69,6 +70,17 @@ func cmdDoctor() error {
 		}
 	} else if len(cfg.Identities) == 0 {
 		c.warn("no passthrough and no identities: Claude can't use any credential (`iris passthrough on`)")
+	}
+	if cfg.PassthroughEnabled(config.ToolSSH) {
+		up := sshagent.Upstream(cfg.SSH.Upstream)
+		if up == "" {
+			c.warn("ssh passthrough: no upstream agent found (1Password agent or $SSH_AUTH_SOCK); set ssh.upstream")
+		} else if conn, err := net.DialTimeout("unix", up, 2*time.Second); err != nil {
+			c.warn("ssh passthrough: upstream agent %s not reachable (%v)", up, err)
+		} else {
+			conn.Close()
+			c.ok("ssh passthrough → %s", up)
+		}
 	}
 	if id, ok := firstHTTP(cfg); ok && !cfg.Proxy.Enabled {
 		c.fail("%s is an http identity but proxy.enabled is false", id)

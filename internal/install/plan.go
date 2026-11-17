@@ -121,10 +121,19 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 		env["CLOUDSDK_CONFIG"] = paths.ClaudeGcloudDir()
 		try(add("sandbox.filesystem.allowWrite", paths.ClaudeGcloudDir())) // gcloud writes logs/cache here
 	}
-	if cfg.Uses(config.ToolGit) {
+	sshOn := cfg.PassthroughEnabled(config.ToolSSH)
+	if cfg.Uses(config.ToolGit) || sshOn {
 		env["GIT_CONFIG_GLOBAL"] = paths.ClaudeGitconfig()
 		env["GIT_TERMINAL_PROMPT"] = "0"
 		env["GH_CONFIG_DIR"] = paths.ClaudeDir() + "/gh"
+	}
+	if sshOn {
+		// The sandbox talks to the iris agent, never to 1Password's socket.
+		try(add("sandbox.network.allowUnixSockets", paths.SSHAgentSocket()))
+		env["SSH_AUTH_SOCK"] = paths.SSHAgentSocket()
+		// ~/.ssh is hidden: skip its config, use the copied known_hosts.
+		env["GIT_SSH_COMMAND"] = "ssh -F /dev/null -o IdentityAgent=" + paths.SSHAgentSocket() +
+			" -o UserKnownHostsFile=" + paths.ClaudeKnownHosts() + " -o StrictHostKeyChecking=yes"
 	}
 	if cfg.Uses(config.ToolDocker) {
 		env["DOCKER_CONFIG"] = paths.ClaudeDockerDir()

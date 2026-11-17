@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,9 +24,11 @@ import (
 	"github.com/mechanomythia/iris/internal/config"
 	"github.com/mechanomythia/iris/internal/install"
 	"github.com/mechanomythia/iris/internal/paths"
+	"github.com/mechanomythia/iris/internal/peer"
 	"github.com/mechanomythia/iris/internal/protocol"
 	"github.com/mechanomythia/iris/internal/provision"
 	"github.com/mechanomythia/iris/internal/proxy"
+	"github.com/mechanomythia/iris/internal/sshagent"
 )
 
 const usage = `iris: credential broker for Claude Code
@@ -300,7 +303,23 @@ func cmdDaemon(args []string) error {
 		}()
 		logger.Printf("proxy on %s", cfg.Proxy.Listen)
 	}
-	logger.Printf("broker %s on %s, control on %s, %d identities", broker.Version, paths.BrokerSocket(), paths.ControlSocket(), len(cfg.Identities))
+	// SSH agent for the sandbox (ssh passthrough): forwards approved sign
+	// requests to your agent (1Password, ...). Refuses everything when ssh
+	// passthrough is off, since Resolve finds no identity.
+	sa := &sshagent.Server{
+		Upstream: func() string { return sshagent.Upstream(b.Config().SSH.Upstream) },
+		Logf:     logger.Printf,
+		Peer:     sshPeer,
+		Gate: func(ctx context.Context, p sshagent.Purpose, key string, pid int, argv []string) error {
+			return b.ApproveUse(ctx, config.ToolSSH, p.Target(), "your SSH key ("+key+")", broker.ProcInfo{PID: pid, Argv: argv})
+		},
+	}
+	go func() {
+		if err := sa.Serve(ctx, paths.SSHAgentSocket()); err != nil {
+			logger.Printf("ssh agent: %v", err)
+		}
+	}()
+	logger.Printf("broker %s on %s, control on %s, ssh agent on %s, %d identities", broker.Version, paths.BrokerSocket(), paths.ControlSocket(), paths.SSHAgentSocket(), len(cfg.Identities))
 	srv := &broker.Server{B: b, Logf: logger.Printf}
 	// Dev only: lets you drive the control socket from a shell that runs under
 	// Claude Code. Claude cannot set the launchd daemon's environment.
@@ -309,6 +328,21 @@ func cmdDaemon(args []string) error {
 		logger.Printf("WARNING: control socket accepts Claude descendants (IRIS_UNSAFE_ALLOW_CLAUDE_CONTROL)")
 	}
 	return srv.Serve(ctx, paths.BrokerSocket(), paths.ControlSocket())
+}
+
+// sshPeer describes who is asking the agent: for `git commit` that's
+// ssh-keygen, so show its parent (the git command) first.
+func sshPeer(c net.Conn) (int, []string) {
+	pid := peer.PID(c)
+	inf, ok := peer.Lookup(pid)
+	if !ok {
+		return pid, nil
+	}
+	argv := []string{inf.Args}
+	if par, ok := peer.Lookup(inf.PPID); ok && par.Args != "" {
+		argv = []string{par.Args + "  →  " + inf.Args}
+	}
+	return pid, argv
 }
 
 // ---------------- control clients ----------------

@@ -57,8 +57,13 @@ func ControlSocket() string {
 	}
 	return filepath.Join(StateDir(), "control.sock")
 }
-func AuditLog() string  { return filepath.Join(StateDir(), "audit.jsonl") }
-func DaemonLog() string { return filepath.Join(StateDir(), "irisd.log") }
+func AuditLog() string { return filepath.Join(StateDir(), "audit.jsonl") }
+
+// SSHAgentSocket is the agent the sandbox uses (ssh passthrough). Reachable
+// from the sandbox; every sign request goes through the iris dialog.
+func SSHAgentSocket() string   { return filepath.Join(StateDir(), "ssh-agent.sock") }
+func ClaudeKnownHosts() string { return filepath.Join(ClaudeDir(), "ssh", "known_hosts") }
+func DaemonLog() string        { return filepath.Join(StateDir(), "irisd.log") }
 
 func ShareDir() string         { return filepath.Join(home(), ".local", "share", "iris") }
 func ClaudeDir() string        { return filepath.Join(ShareDir(), "claude") }

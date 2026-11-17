@@ -21,9 +21,10 @@ const (
 	ToolGit    = "git"
 	ToolDocker = "docker"
 	ToolHTTP   = "http"
+	ToolSSH    = "ssh" // passthrough only: your SSH agent (1Password, ...)
 )
 
-var KnownTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker, ToolHTTP}
+var KnownTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker, ToolHTTP, ToolSSH}
 
 type Duration struct{ time.Duration }
 
@@ -39,6 +40,7 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 
 type Config struct {
+	SSH         SSH         `yaml:"ssh,omitempty"`
 	Claude      Claude      `yaml:"claude"`
 	Passthrough Passthrough `yaml:"passthrough"`
 	Approval    Approval    `yaml:"approval"`
@@ -56,7 +58,15 @@ type Passthrough struct {
 }
 
 // PassthroughTools are the tools passthrough can serve.
-var PassthroughTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker}
+var PassthroughTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker, ToolSSH}
+
+// SSH configures the ssh passthrough: iris serves an SSH agent to the
+// sandbox and forwards approved sign requests to your agent.
+type SSH struct {
+	// Upstream is your agent's socket. Empty = 1Password's agent if present,
+	// else $SSH_AUTH_SOCK of the broker.
+	Upstream string `yaml:"upstream,omitempty"`
+}
 
 // Claude lists the Claude Code config dirs (CLAUDE_CONFIG_DIR values) that
 // `iris install` configures. Empty = just the default (~/.claude, or
