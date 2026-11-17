@@ -150,6 +150,26 @@ iris restart
 
 Setting these ports replaces Claude Code's own domain controls for sandbox traffic, so iris is the allowlist from then on. Every decision lands in the audit log.
 
+## CLIs that keep their token in your Keychain (glab, gh): token injection
+
+Tools like `glab` store their token in your Keychain, which the sandbox can't read. Iris makes them work without ever giving the token to the sandbox:
+
+```bash
+iris provision gitlab
+```
+
+```bash
+iris ca trust
+```
+
+```bash
+iris restart
+```
+
+- Inside the sandbox, `glab` gets a placeholder `GITLAB_TOKEN`, so it thinks it's logged in. When it calls the GitLab API, iris swaps the placeholder `PRIVATE-TOKEN` header for `Authorization: Bearer <your token>`. Iris reads that token on your Mac with `glab config get token`, after you approve (or from the Keychain with `--paste`).
+- For that, iris terminates HTTPS for those hosts with its own CA. Go tools on macOS only trust your Keychain, hence `iris ca trust`. The CA is **name-constrained** to the injected hosts (`gitlab.com` here): even trusted, and even if its key leaked, it can't vouch for any other site. Adding or removing injected hosts regenerates it; `iris install` then tells you to trust it again.
+- The same mechanism works for any API (`iris provision secret --tool http …`); `removeHeaders` and `sandboxEnv` on an `http` identity cover other CLIs' placeholders.
+
 ## Claude-only identities: `iris provision`
 
 Run these from **your** terminal. Each one creates a narrow identity with your credentials and adds it to the config. The broker then mints short-lived credentials for that identity, never for your personal one.
@@ -182,7 +202,7 @@ Every provisioner supports `--dry-run`, which prints the exact `kubectl`/`gcloud
 
 ## Using it
 
-Inside Claude: `kubectl get pods` opens a popup with **Deny · Once · 15 min · 1 h · Until session end**. Return picks the shortest option, Escape denies, and no answer within 60 s denies.
+Inside Claude: `kubectl get pods` opens a popup with **Deny · Once · 15 min · 1 h · Until session end**. Return picks the shortest option, Escape denies, and no answer within 60 s denies. With Touch ID on, the sensor is armed inside the popup, like 1Password: touch it to allow once. The longer options stay buttons and ask for Touch ID when clicked.
 
 ```bash
 iris status           # daemon, UI, identities, grants
