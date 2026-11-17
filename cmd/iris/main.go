@@ -49,6 +49,7 @@ Day to day
 Internals
   iris daemon                               run the broker (launchd does this)
   iris reload                               re-read config
+  iris restart                              restart the broker (after upgrading Iris)
   iris hook pre-tool-use|session-start|session-end   (called by Claude Code)
   iris selftest                             run INSIDE a Claude Code session: acceptance checks
 `
@@ -98,6 +99,12 @@ func main() {
 		err = cmdConfig(args)
 	case "version", "--version":
 		fmt.Println("iris", broker.Version)
+		var r protocol.Response
+		if control(protocol.Request{Op: "status"}, &r) == nil && r.Status.Version != broker.Version {
+			fmt.Printf("running broker is %s: restart it with `iris restart` (or `iris install` to point it at this binary)\n", r.Status.Version)
+		}
+	case "restart":
+		err = cmdRestart()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

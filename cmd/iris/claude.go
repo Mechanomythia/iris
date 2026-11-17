@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/mechanomythia/iris/internal/config"
 	"github.com/mechanomythia/iris/internal/install"
 	"github.com/mechanomythia/iris/internal/paths"
+	"github.com/mechanomythia/iris/internal/protocol"
 )
 
 // ---------------- iris claude: config dirs (aliases) ----------------
@@ -161,6 +163,39 @@ func tildeAll(ds []string) []string {
 		out[i] = paths.Tilde(d)
 	}
 	return out
+}
+
+// ---------------- iris restart ----------------
+
+func cmdRestart() error {
+	if runtime.GOOS != "darwin" {
+		return errors.New("restart manages the launchd agent (macOS); elsewhere stop and start `iris daemon` yourself")
+	}
+	if _, err := os.Stat(paths.LaunchAgentPlist()); err != nil {
+		return errors.New("no launch agent installed: run `iris install`")
+	}
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), paths.LaunchAgentLabel)
+	if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl kickstart: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	// Report what is running now (give it a moment to bind its sockets).
+	for i := 0; i < 20; i++ {
+		time.Sleep(150 * time.Millisecond)
+		var r protocol.Response
+		if control(protocol.Request{Op: "status"}, &r) == nil {
+			fmt.Println("broker restarted:", r.Status.Version)
+			if b, err := os.ReadFile(paths.LaunchAgentPlist()); err == nil {
+				if exe, err := os.Executable(); err == nil {
+					exe, _ = filepath.EvalSymlinks(exe)
+					if !strings.Contains(string(b), exe) {
+						fmt.Println("note: the launch agent runs a different iris binary than this one; `iris install` points it here")
+					}
+				}
+			}
+			return nil
+		}
+	}
+	return errors.New("broker did not come back; see ~/.local/state/iris/irisd.log")
 }
 
 // ---------------- iris link: put iris on PATH ----------------

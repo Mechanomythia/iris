@@ -33,6 +33,7 @@ struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Hy.s4) {
             header
+            versionMismatch
             grantsPlate
             recentPlate
             actions
@@ -62,9 +63,29 @@ struct MenuContent: View {
                 }
             }
             Spacer()
-            if let v = state.status?.version {
-                Text("v\(v)").font(Hy.mono(11)).foregroundStyle(Hy.faint)
+            Text("v\(appVersion)").font(Hy.mono(11)).foregroundStyle(Hy.faint)
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    /// The broker is a separate launchd process: replacing Iris.app doesn't restart it.
+    @ViewBuilder private var versionMismatch: some View {
+        if let broker = state.status?.version, broker != appVersion {
+            HStack(alignment: .center, spacing: Hy.s2) {
+                StarGlyph(state: .degraded, size: 12)
+                Text("Broker is v\(broker), app is v\(appVersion).")
+                    .font(Hy.ui(12))
+                    .foregroundStyle(Hy.classK)
+                Spacer()
+                Button("Update broker") { state.runCLI(["install"], title: "iris install") }
+                    .buttonStyle(HyButton(kind: .secondary, small: true))
             }
+            .padding(.horizontal, Hy.s3)
+            .padding(.vertical, Hy.s2)
+            .background(RoundedRectangle(cornerRadius: Hy.r1).fill(Hy.tintK))
         }
     }
 
