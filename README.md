@@ -24,7 +24,7 @@ The sandbox can't read `~/.kube`, `~/.aws`, `~/.config/gcloud`, `~/.ssh`, and so
 | `iris-helper` | tiny credential-helper binary, holds no secrets | inside the sandbox |
 | `Iris.app` | SwiftUI menu bar app: approval popups, Touch ID, active grants, revoke-all, recent activity, one-click setup | your Mac |
 
-![iris shutter](docs/iris-shutter.png)
+<img src="docs/app-icon.png" width="128" alt="Iris app icon"> ![iris shutter](docs/iris-shutter.png)
 
 The popup and the menu bar icon are an iris shutter. In the menu bar it's closed when nothing is granted, open while Claude holds a grant, and struck through when the broker isn't reachable. In the popup it stays shut until you approve (after Touch ID, if enabled), then spirals open; Deny makes it clunk shut. It's drawn in code (`IrisShutter.swift`), with no image assets.
 
