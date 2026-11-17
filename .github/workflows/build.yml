@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Publish a release with this version (e.g. 0.2.0). GitHub creates the tag vX.Y.Z on this commit. Leave empty for a plain build."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -33,7 +38,7 @@ jobs:
       # the app is ad-hoc signed as before. See docs/notarization.md.
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
-      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.2.0-dev.{0}', github.run_number) }}
+      VERSION: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_version != '') && inputs.release_version || (startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.2.0-dev.{0}', github.run_number)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -118,7 +123,7 @@ jobs:
 
   release:
     name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
     needs: macos
     runs-on: ubuntu-latest
     permissions:
@@ -129,5 +134,9 @@ jobs:
           name: Iris-macOS
       - uses: softprops/action-gh-release@v2
         with:
+          # Tag push: uses that tag. Manual release: creates vX.Y.Z on this commit.
+          tag_name: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_version != '') && format('v{0}', inputs.release_version) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_version != '') && format('Iris {0}', inputs.release_version) || format('Iris {0}', github.ref_name) }}
           files: Iris-*.zip
           generate_release_notes: true
