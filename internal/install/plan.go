@@ -131,9 +131,17 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 		// The sandbox talks to the iris agent, never to 1Password's socket.
 		try(add("sandbox.network.allowUnixSockets", paths.SSHAgentSocket()))
 		env["SSH_AUTH_SOCK"] = paths.SSHAgentSocket()
-		// ~/.ssh is hidden: skip its config, use the copied known_hosts.
-		env["GIT_SSH_COMMAND"] = "ssh -F /dev/null -o IdentityAgent=" + paths.SSHAgentSocket() +
-			" -o UserKnownHostsFile=" + paths.ClaudeKnownHosts() + " -o StrictHostKeyChecking=yes"
+	}
+	if cmd := SSHCommand(cfg, o.HelperBin); cmd != "" {
+		env["GIT_SSH_COMMAND"] = cmd
+	}
+	if cfg.Proxy.Enabled && cfg.Proxy.SocksListen != "" {
+		if _, port, err := splitHostPort(cfg.Proxy.SocksListen); err != nil {
+			try(err)
+		} else {
+			try(set("sandbox.network.socksProxyPort", port))
+			env["IRIS_SOCKS"] = cfg.Proxy.SocksListen
+		}
 	}
 	if cfg.Uses(config.ToolDocker) {
 		env["DOCKER_CONFIG"] = paths.ClaudeDockerDir()
@@ -180,6 +188,25 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 		return fmt.Errorf("planning settings: %v", errs)
 	}
 	return nil
+}
+
+// SSHCommand is Claude's GIT_SSH_COMMAND: ~/.ssh is hidden, so skip its
+// config and use the copied known_hosts; use the iris agent (ssh
+// passthrough) and the iris SOCKS proxy (network gate) when on.
+func SSHCommand(cfg *config.Config, helper string) string {
+	sshOn := cfg.PassthroughEnabled(config.ToolSSH)
+	socks := cfg.Proxy.Enabled && cfg.Proxy.SocksListen != ""
+	if !sshOn && !socks {
+		return ""
+	}
+	parts := []string{"ssh", "-F", "/dev/null", "-o", "UserKnownHostsFile=" + paths.ClaudeKnownHosts(), "-o", "StrictHostKeyChecking=yes"}
+	if sshOn {
+		parts = append(parts, "-o", "IdentityAgent="+paths.SSHAgentSocket())
+	}
+	if socks {
+		parts = append(parts, "-o", shellQuote("ProxyCommand="+helper+" connect %h %p"))
+	}
+	return strings.Join(parts, " ")
 }
 
 func readRule(f string) string {

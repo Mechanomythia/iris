@@ -273,7 +273,7 @@ func Generate(cfg *config.Config, o Options) ([]string, error) {
 
 	// git
 	sshOn := cfg.PassthroughEnabled(config.ToolSSH)
-	if sshOn {
+	if SSHCommand(cfg, o.HelperBin) != "" {
 		// known_hosts isn't secret; ~/.ssh is hidden from the sandbox, so give
 		// Claude's ssh a copy to verify hosts against.
 		if b, err := os.ReadFile(filepath.Join(paths.Home(), ".ssh", "known_hosts")); err == nil {

@@ -26,6 +26,7 @@ import (
 	"github.com/mechanomythia/iris/internal/creds"
 	"github.com/mechanomythia/iris/internal/paths"
 	"github.com/mechanomythia/iris/internal/protocol"
+	"github.com/mechanomythia/iris/internal/proxy"
 )
 
 func main() {
@@ -50,6 +51,8 @@ func main() {
 		err = git(args[1:])
 	case "docker":
 		err = docker(args[1:])
+	case "connect":
+		err = connect(args[1:])
 	case "ping":
 		_, err = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "ping"}, 5*time.Second)
 		if err == nil {
@@ -261,6 +264,28 @@ func run(bin string, args, extraEnv []string) error {
 		os.Exit(ee.ExitCode())
 	}
 	return err
+}
+
+// connect is an SSH ProxyCommand: it tunnels stdin/stdout to HOST:PORT
+// through the iris SOCKS proxy, which asks you before reaching new hosts.
+func connect(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: iris-helper connect HOST PORT")
+	}
+	server := os.Getenv("IRIS_SOCKS")
+	if server == "" {
+		server = "127.0.0.1:18898"
+	}
+	c, err := proxy.DialSOCKS(server, args[0], args[1])
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(c, os.Stdin); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(os.Stdout, c); done <- struct{}{} }()
+	<-done
+	return nil
 }
 
 // ---- git credential helper protocol ----

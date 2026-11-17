@@ -22,6 +22,8 @@ const (
 	ToolDocker = "docker"
 	ToolHTTP   = "http"
 	ToolSSH    = "ssh" // passthrough only: your SSH agent (1Password, ...)
+	// ToolNetwork gates egress through the iris proxy (unknown hosts).
+	ToolNetwork = "network"
 )
 
 var KnownTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker, ToolHTTP, ToolSSH}
@@ -89,12 +91,21 @@ type Approval struct {
 type Proxy struct {
 	Enabled bool   `yaml:"enabled"`
 	Listen  string `yaml:"listen"`
-	// AllowedHosts, if non-empty, is an egress allowlist for everything that
-	// passes through the proxy (glob: *.example.com). Hosts with an http
-	// identity are always allowed. Empty = allow all (Claude's own domain
-	// controls are bypassed once httpProxyPort is set, so consider filling this).
+	// AllowedHosts are always allowed (glob: *.example.com), on top of the
+	// built-in developer defaults (package registries, GitHub) unless
+	// NoDefaults. Hosts with an http identity are always allowed.
 	AllowedHosts []string `yaml:"allowedHosts"`
+	// UnknownHosts decides everything else: "ask" (iris dialog, with an
+	// Always option that adds the host to AllowedHosts), "deny", or "allow".
+	// Empty keeps the old behaviour: allow all when AllowedHosts is empty.
+	UnknownHosts string `yaml:"unknownHosts,omitempty"`
+	NoDefaults   bool   `yaml:"noDefaults,omitempty"`
+	// SocksListen serves SOCKS5 for non-HTTP traffic (git over SSH on port
+	// 22, databases); Claude's sandbox sends it there via socksProxyPort.
+	SocksListen string `yaml:"socksListen,omitempty"`
 }
+
+func (p Proxy) Asks() bool { return p.Enabled && p.UnknownHosts == "ask" }
 
 // Identity maps (tool, target) to a secret source.
 type Identity struct {
@@ -193,6 +204,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s: %w", where, err)
 		}
 	}
+	switch c.Proxy.UnknownHosts {
+	case "", "ask", "deny", "allow":
+	default:
+		return fmt.Errorf("proxy.unknownHosts: want ask, deny or allow, got %q", c.Proxy.UnknownHosts)
+	}
 	for _, t := range c.Passthrough.Tools {
 		if !contains(PassthroughTools, t) {
 			return fmt.Errorf("passthrough.tools: %q not supported (want %s)", t, strings.Join(PassthroughTools, ", "))
@@ -262,6 +278,12 @@ func (c *Config) Find(tool, target string) (Identity, bool) {
 // Resolve picks the identity for a request: an explicit identity for
 // (tool, target) first, then passthrough of the user's own credential.
 func (c *Config) Resolve(tool, target string) (Identity, bool) {
+	if tool == ToolNetwork {
+		if !c.Proxy.Asks() || ValidateTarget(target) != nil {
+			return Identity{}, false
+		}
+		return Identity{Tool: ToolNetwork, Target: target, Scope: "network access", Source: Source{Passthrough: true}}, true
+	}
 	if id, ok := c.Find(tool, target); ok {
 		return id, true
 	}
@@ -316,12 +338,17 @@ type Option struct {
 	Once bool
 	// Session grants are revoked by the SessionEnd hook.
 	Session bool
+	// Persist saves the approval (network hosts → proxy.allowedHosts).
+	Persist bool
 }
 
 func ParseOption(s string, sessionMax time.Duration) (Option, error) {
 	switch s {
 	case "once":
 		return Option{Name: s, Once: true}, nil
+	case "always":
+		// Network only: the host is added to proxy.allowedHosts.
+		return Option{Name: s, TTL: 24 * time.Hour, Persist: true}, nil
 	case "session":
 		if sessionMax <= 0 {
 			sessionMax = 8 * time.Hour
@@ -341,6 +368,8 @@ func (o Option) Display() string {
 		return "Once"
 	case o.Session:
 		return "Until session end"
+	case o.Persist:
+		return "Always"
 	}
 	d := o.TTL
 	if d%time.Hour == 0 {

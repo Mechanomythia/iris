@@ -74,24 +74,73 @@ func (p *Proxy) identityFor(host string) (config.Identity, bool) {
 	return p.B.Config().Find(config.ToolHTTP, host)
 }
 
-func (p *Proxy) allowed(host string) bool {
+// DefaultAllowed are developer hosts allowed without asking (when
+// proxy.noDefaults is off): package registries, GitHub, distro mirrors.
+var DefaultAllowed = []string{
+	"registry.npmjs.org", "*.npmjs.org", "registry.yarnpkg.com", "*.yarnpkg.com", "jsr.io", "*.jsr.io",
+	"pypi.org", "files.pythonhosted.org", "*.pythonhosted.org",
+	"crates.io", "*.crates.io", "proxy.golang.org", "sum.golang.org", "*.golang.org",
+	"rubygems.org", "*.rubygems.org", "repo.maven.apache.org", "repo1.maven.org", "*.gradle.org", "services.gradle.org",
+	"github.com", "*.github.com", "*.githubusercontent.com", "codeload.github.com",
+	"registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com",
+	"nodejs.org", "deb.debian.org", "archive.ubuntu.com", "security.ubuntu.com",
+}
+
+func matchHost(pat, host string) bool {
+	pat = strings.ToLower(pat)
+	if ok, _ := path.Match(pat, host); ok {
+		return true
+	}
+	// *.example.com also matches deeper subdomains
+	return strings.HasPrefix(pat, "*.") && strings.HasSuffix(host, pat[1:])
+}
+
+// ErrBlocked is returned for hosts that are not allowed.
+var ErrBlocked = errors.New("iris proxy: host not allowed")
+
+// decide is the egress gate for both the HTTP proxy and SOCKS. With
+// unknownHosts: ask it blocks on the iris dialog.
+func (p *Proxy) decide(ctx context.Context, host, port, desc string) error {
 	if _, ok := p.identityFor(host); ok {
-		return true
+		return nil
 	}
-	list := p.B.Config().Proxy.AllowedHosts
-	if len(list) == 0 {
-		return true
-	}
-	for _, pat := range list {
-		if ok, _ := path.Match(strings.ToLower(pat), host); ok {
-			return true
-		}
-		// *.example.com also matches deeper subdomains
-		if strings.HasPrefix(pat, "*.") && strings.HasSuffix(host, pat[1:]) {
-			return true
+	cfg := p.B.Config().Proxy
+	if !cfg.NoDefaults {
+		for _, pat := range DefaultAllowed {
+			if matchHost(pat, host) {
+				return nil
+			}
 		}
 	}
-	return false
+	for _, pat := range cfg.AllowedHosts {
+		if matchHost(pat, host) {
+			return nil
+		}
+	}
+	switch cfg.UnknownHosts {
+	case "ask":
+		err := p.B.ApproveUse(ctx, config.ToolNetwork, host, "network access to "+net.JoinHostPort(host, port),
+			broker.ProcInfo{Argv: []string{desc}})
+		if err != nil {
+			return fmt.Errorf("%w: %s (%v)", ErrBlocked, host, err)
+		}
+		return nil
+	case "deny":
+		return fmt.Errorf("%w: %s", ErrBlocked, host)
+	case "allow":
+		return nil
+	}
+	if len(cfg.AllowedHosts) == 0 { // legacy: no list = allow all
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrBlocked, host)
+}
+
+func portOf(hostport, def string) string {
+	if _, p, err := net.SplitHostPort(hostport); err == nil {
+		return p
+	}
+	return def
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -105,8 +154,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := hostOnly(r.URL.Host)
-	if !p.allowed(host) {
-		http.Error(w, "iris proxy: host not allowed: "+host, http.StatusForbidden)
+	if err := p.decide(r.Context(), host, portOf(r.URL.Host, "80"), r.Method+" "+r.URL.String()); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	if _, inject := p.identityFor(host); inject {
@@ -121,8 +170,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	host := hostOnly(r.Host)
-	if !p.allowed(host) {
-		http.Error(w, "iris proxy: host not allowed: "+host, http.StatusForbidden)
+	if err := p.decide(r.Context(), host, portOf(r.Host, "443"), "CONNECT "+r.Host); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	hj, ok := w.(http.Hijacker)

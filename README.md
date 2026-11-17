@@ -131,6 +131,25 @@ iris passthrough status
 - After you add kube contexts or AWS profiles, re-run `iris install` so Claude sees them.
 - Mixing modes works: an identity from `iris provision` takes precedence for its target, and everything else passes through. Use `iris passthrough off kube` to only allow the identities you provisioned for kube.
 
+## Network: iris as the sandbox's gate (`iris network on`)
+
+There's always another tool whose host isn't on Claude Code's allowlist (`gitlab.com` on port 22, `glab`'s API), and Claude can't add hosts itself. With the network gate on, Claude Code sends sandbox traffic through iris (`httpProxyPort` for HTTP/HTTPS, `socksProxyPort` for everything else), and iris decides:
+
+```bash
+iris network on
+```
+
+```bash
+iris restart
+```
+
+- A host that isn't allowed yet opens the iris dialog with the command that tried to reach it: **Deny · Once · 15 min · 1 h · Always**. **Always** adds it to `proxy.allowedHosts`, so you approve each host once.
+- Package registries, GitHub and distro mirrors are built in (`iris network status` lists them; `proxy.noDefaults: true` turns that off).
+- `git push` over SSH goes through iris's SOCKS server: Claude's SSH command uses `iris-helper connect %h %p` as its `ProxyCommand`. Combined with ssh passthrough, a push to GitLab asks for the host once, then the signature or login per your grants.
+- To manage hosts yourself: `iris network allow gitlab.com` or `iris network forget gitlab.com`. `iris network off` goes back to Claude Code's own allowlist.
+
+Setting these ports replaces Claude Code's own domain controls for sandbox traffic, so iris is the allowlist from then on. Every decision lands in the audit log.
+
 ## Claude-only identities: `iris provision`
 
 Run these from **your** terminal. Each one creates a narrow identity with your credentials and adds it to the config. The broker then mints short-lived credentials for that identity, never for your personal one.

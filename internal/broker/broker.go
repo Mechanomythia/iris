@@ -46,6 +46,8 @@ type Broker struct {
 	contexts []hookContext
 
 	ProxyListen string
+	// OnPersist saves an "Always" approval (network: host → allowedHosts).
+	OnPersist func(id config.Identity)
 }
 
 type prompt struct {
@@ -271,6 +273,10 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		}
 		opts = append(opts, o)
 	}
+	if id.Tool == config.ToolNetwork {
+		always, _ := config.ParseOption("always", 0)
+		opts = append(opts, always)
+	}
 	timeout := cfg.Approval.Timeout.Duration
 	if timeout <= 0 {
 		timeout = time.Minute
@@ -289,6 +295,9 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		b.Audit.Write(audit.Entry{Event: ev, Tool: id.Tool, Target: id.Target, Scope: id.Scope, Profile: p.Profile,
 			PID: p.PID, Cwd: p.Cwd, Command: req.Command, Detail: "via " + d.Via})
 		return nil, ErrDenied
+	}
+	if d.Option.Persist && b.OnPersist != nil {
+		b.OnPersist(id)
 	}
 	g := b.Grants.Add(id.Tool, id.Target, p.Profile, id.Scope, d.Option.Name, d.Option.TTL, d.Option.Once, d.Option.Session)
 	b.Audit.Write(audit.Entry{Event: "grant", Tool: id.Tool, Target: id.Target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,

@@ -290,7 +290,7 @@ func TestPassthroughConfigs(t *testing.T) {
 		t.Errorf("git:\n%s", git)
 	}
 	s0, _ := os.ReadFile(paths.ClaudeSettings())
-	for _, w := range []string{paths.SSHAgentSocket(), `"SSH_AUTH_SOCK"`, "-F /dev/null -o IdentityAgent=", "UserKnownHostsFile=" + paths.ClaudeKnownHosts()} {
+	for _, w := range []string{paths.SSHAgentSocket(), `"SSH_AUTH_SOCK"`, "-F /dev/null", "IdentityAgent=" + paths.SSHAgentSocket(), "UserKnownHostsFile=" + paths.ClaudeKnownHosts()} {
 		if !strings.Contains(string(s0), w) {
 			t.Errorf("settings missing %s", w)
 		}

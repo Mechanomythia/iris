@@ -37,6 +37,7 @@ Setup
   iris install [--detect] [--claude-dir D]  configure Claude Code (all config dirs) + start the broker
   iris uninstall [--claude-dir D] [--purge] revert what install did (one dir or all)
   iris passthrough on|off|status [tools]    let Claude use YOUR credentials, approved per use
+  iris network on|off|status|allow|forget   iris as the sandbox's network gate (ask for unknown hosts)
   iris claude list|detect|add|remove        manage Claude config dirs (aliases with CLAUDE_CONFIG_DIR)
   iris cloud new|show|list                  set up a Claude Code cloud environment (claude.ai/code)
   iris link [--dir ~/.local/bin]            put iris on your PATH (symlink)
@@ -114,6 +115,8 @@ func main() {
 		err = cmdDev(args)
 	case "cloud":
 		err = cmdCloud(args)
+	case "network":
+		err = cmdNetwork(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -288,6 +291,30 @@ func cmdDaemon(args []string) error {
 		}
 	}()
 
+	// "Always" on a network prompt: remember the host in proxy.allowedHosts.
+	b.OnPersist = func(id config.Identity) {
+		if id.Tool != config.ToolNetwork {
+			return
+		}
+		c, err := config.Load(*cfgPath)
+		if err != nil {
+			logger.Printf("persist %s: %v", id.Target, err)
+			return
+		}
+		for _, h := range c.Proxy.AllowedHosts {
+			if h == id.Target {
+				return
+			}
+		}
+		c.Proxy.AllowedHosts = append(c.Proxy.AllowedHosts, id.Target)
+		if err := config.Save(*cfgPath, c); err != nil {
+			logger.Printf("persist %s: %v", id.Target, err)
+			return
+		}
+		go func() { _ = b.Reload() }()
+		logger.Printf("network: %s added to proxy.allowedHosts", id.Target)
+	}
+
 	if cfg.Proxy.Enabled {
 		ca, err := proxy.EnsureCA(paths.CACert(), paths.CAKey())
 		if err != nil {
@@ -302,6 +329,14 @@ func cmdDaemon(args []string) error {
 			}
 		}()
 		logger.Printf("proxy on %s", cfg.Proxy.Listen)
+		if cfg.Proxy.SocksListen != "" {
+			go func() {
+				if err := p.ServeSOCKS(ctx, cfg.Proxy.SocksListen); err != nil {
+					logger.Printf("socks: %v", err)
+				}
+			}()
+			logger.Printf("socks on %s", cfg.Proxy.SocksListen)
+		}
 	}
 	// SSH agent for the sandbox (ssh passthrough): forwards approved sign
 	// requests to your agent (1Password, ...). Refuses everything when ssh
@@ -360,6 +395,8 @@ func control(req protocol.Request, out *protocol.Response) error {
 	}
 	return nil
 }
+
+func protocolReload() protocol.Request { return protocol.Request{Op: "reload"} }
 
 func cmdStatus() error {
 	var r protocol.Response

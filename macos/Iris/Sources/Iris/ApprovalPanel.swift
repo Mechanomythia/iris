@@ -180,6 +180,7 @@ struct ApprovalView: View {
         case "git": return "Git"
         case "docker": return "Docker registry"
         case "http": return "HTTP API"
+        case "network": return "Network access"
         case "ssh":
             if event.target?.hasPrefix("signature:") == true { return "Signature" }
             if event.target?.hasPrefix("login:") == true { return "SSH login" }
