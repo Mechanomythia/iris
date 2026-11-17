@@ -38,6 +38,7 @@ jobs:
       # the app is ad-hoc signed as before. See docs/notarization.md.
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
+      HAS_SPARKLE: ${{ secrets.SPARKLE_ED_PRIVATE_KEY != '' }}
       VERSION: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_version != '') && inputs.release_version || (startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.2.0-dev.{0}', github.run_number)) }}
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +74,8 @@ jobs:
           echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Build Iris.app
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           VERSION="${VERSION#v}" macos/Iris/build-app.sh
 
@@ -104,11 +107,26 @@ jobs:
           spctl --assess --type execute -vv dist/Iris.app
           rm -f "$KEY"
 
+      - name: Sparkle appcast (signed update feed)
+        if: env.HAS_SPARKLE == 'true'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          V="${VERSION#v}"
+          # Signs the final (stapled) zip; the URL is where the release job publishes it.
+          go run ./cmd/iris dev appcast --version "$V" \
+            --url "https://github.com/${{ github.repository }}/releases/download/v$V/Iris-$V.zip" \
+            --notes "https://github.com/${{ github.repository }}/releases/tag/v$V" \
+            --file "dist/Iris-$V.zip" --out dist/appcast.xml
+          cat dist/appcast.xml
+
       - name: Smoke test bundled CLI
         run: |
           dist/Iris.app/Contents/Resources/bin/iris version
           dist/Iris.app/Contents/Resources/bin/iris install --dry-run --no-launchd
           lipo -archs dist/Iris.app/Contents/MacOS/Iris
+          test -d dist/Iris.app/Contents/Frameworks/Sparkle.framework
+          /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" dist/Iris.app/Contents/Info.plist || echo "(auto-update disabled in this build)"
           codesign -dv --verbose=2 dist/Iris.app 2>&1 | grep -E "Authority|TeamIdentifier|flags" || true
 
       - name: Remove signing keychain
@@ -118,7 +136,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Iris-macOS
-          path: dist/Iris-*.zip
+          path: |
+            dist/Iris-*.zip
+            dist/appcast.xml
           if-no-files-found: error
 
   release:
@@ -138,5 +158,7 @@ jobs:
           tag_name: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_version != '') && format('v{0}', inputs.release_version) || github.ref_name }}
           target_commitish: ${{ github.sha }}
           name: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_version != '') && format('Iris {0}', inputs.release_version) || format('Iris {0}', github.ref_name) }}
-          files: Iris-*.zip
+          files: |
+            Iris-*.zip
+            appcast.xml
           generate_release_notes: true

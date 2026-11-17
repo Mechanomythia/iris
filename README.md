@@ -219,6 +219,20 @@ Same threat model as the brief: a prompt injection or a confused agent. A compro
 5. **The proxy bypasses Claude's domain allowlist** (setting `httpProxyPort` does that). Fill `proxy.allowedHosts`.
 6. Grants live in memory: restarting the daemon revokes everything, by design.
 
+## Auto-update
+
+Iris.app updates itself with [Sparkle](https://sparkle-project.org). Every 6 hours it checks `appcast.xml` on the latest GitHub release, then downloads and installs the update. The broker is restarted on the new version automatically. "Install updates automatically" and "Check for updates" are in the menu.
+
+Each update must pass two checks: Apple's notarization, and an Ed25519 signature made with a key that lives only in the `SPARKLE_ED_PRIVATE_KEY` GitHub secret. Someone who could replace a file on the GitHub release still couldn't ship an update.
+
+One-time setup, on your Mac, with an `iris` from a build that includes this feature:
+
+```bash
+iris dev sparkle-keygen
+```
+
+The private key goes to your clipboard. Add it as the repository secret `SPARKLE_ED_PRIVATE_KEY` and keep a copy in your password manager: losing it means installed apps can't verify updates any more. Builds without the secret have the updater switched off. Releases made with the secret publish `appcast.xml` next to the zip.
+
 ## Development
 
 ```bash

@@ -97,10 +97,33 @@ final class AppState: ObservableObject {
                     self.status = s.status
                     self.recent = (a.audit ?? []).reversed()
                     self.lastError = nil
+                    self.restartStaleBroker()
                 }
             } catch {
                 await MainActor.run { self.lastError = error.localizedDescription }
             }
+        }
+    }
+
+    private var triedBrokerRestart = false
+
+    static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    /// After an update the launchd broker is still the old process: restart it
+    /// once per launch. The launch agent runs the bundled iris, which Sparkle
+    /// just replaced, so the restart picks up the new version. If it still
+    /// differs, the menu shows the mismatch notice with "Update broker".
+    private func restartStaleBroker() {
+        guard let v = status?.version, v != Self.appVersion, !triedBrokerRestart else { return }
+        triedBrokerRestart = true
+        let bin = IrisPaths.bundledBin + "/iris"
+        guard FileManager.default.isExecutableFile(atPath: bin) else { return }
+        Task.detached {
+            _ = Self.run(bin, ["restart"])
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await MainActor.run { self.refresh() }
         }
     }
 

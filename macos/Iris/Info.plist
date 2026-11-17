@@ -13,6 +13,11 @@
 	<key>CFBundleVersion</key><string>__VERSION__</string>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
 	<key>LSUIElement</key><true/>
+	<!-- Sparkle auto-update. SUPublicEDKey is added at build time from the signing secret. -->
+	<key>SUFeedURL</key><string>https://github.com/Mechanomythia/iris/releases/latest/download/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key><true/>
+	<key>SUAutomaticallyUpdate</key><true/>
+	<key>SUScheduledCheckInterval</key><integer>21600</integer>
 	<key>NSHumanReadableCopyright</key><string>Local credential broker for Claude Code</string>
 </dict>
 </plist>

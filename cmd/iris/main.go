@@ -50,6 +50,7 @@ Internals
   iris daemon                               run the broker (launchd does this)
   iris reload                               re-read config
   iris restart                              restart the broker (after upgrading Iris)
+  iris dev sparkle-keygen|...               release tooling (auto-update signing)
   iris hook pre-tool-use|session-start|session-end   (called by Claude Code)
   iris selftest                             run INSIDE a Claude Code session: acceptance checks
 `
@@ -105,6 +106,8 @@ func main() {
 		}
 	case "restart":
 		err = cmdRestart()
+	case "dev":
+		err = cmdDev(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

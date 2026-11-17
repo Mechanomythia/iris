@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct IrisApp: App {
     @StateObject private var state = AppState()
+    @StateObject private var updater = Updater()
 
     init() {
         Hy.registerFonts()
@@ -11,7 +12,7 @@ struct IrisApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent().environmentObject(state)
+            MenuContent().environmentObject(state).environmentObject(updater)
         } label: {
             Image(nsImage: IrisIcon.image(menuIcon))
         }
@@ -29,6 +30,7 @@ struct IrisApp: App {
 
 struct MenuContent: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var updater: Updater
 
     var body: some View {
         VStack(alignment: .leading, spacing: Hy.s4) {
@@ -166,6 +168,24 @@ struct MenuContent: View {
 
             Toggle("Launch at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
                 .toggleStyle(HyToggle(onLabel: "On", offLabel: "Off"))
+
+            if updater.enabled {
+                Toggle("Install updates automatically", isOn: Binding(get: { updater.automatic }, set: { updater.setAutomatic($0) }))
+                    .toggleStyle(HyToggle(onLabel: "On", offLabel: "Off"))
+                HStack {
+                    Text("Updates come from the signed GitHub release.")
+                        .font(Hy.ui(11.5))
+                        .foregroundStyle(Hy.faint)
+                    Spacer()
+                    Button("Check for updates") { updater.checkNow() }
+                        .buttonStyle(HyButton(kind: .quiet, small: true))
+                        .disabled(!updater.canCheck)
+                }
+            } else {
+                Text("Auto-update is off in this build.")
+                    .font(Hy.ui(11.5))
+                    .foregroundStyle(Hy.faint)
+            }
 
             HStack {
                 Text("The broker keeps running when Iris quits.")
