@@ -39,11 +39,24 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 
 type Config struct {
-	Claude     Claude     `yaml:"claude"`
-	Approval   Approval   `yaml:"approval"`
-	Proxy      Proxy      `yaml:"proxy"`
-	Identities []Identity `yaml:"identities"`
+	Claude      Claude      `yaml:"claude"`
+	Passthrough Passthrough `yaml:"passthrough"`
+	Approval    Approval    `yaml:"approval"`
+	Proxy       Proxy       `yaml:"proxy"`
+	Identities  []Identity  `yaml:"identities"`
 }
+
+// Passthrough lets Claude use YOUR existing credentials (kube contexts, AWS
+// profiles, gcloud login, git and docker credential helpers), still gated by
+// the iris dialog. The sandbox keeps hiding the credential files; the broker
+// resolves them on the host only after you allow a request. An explicit
+// identity for the same tool/target takes precedence.
+type Passthrough struct {
+	Tools []string `yaml:"tools,omitempty"` // kube, aws, gcp, git, docker
+}
+
+// PassthroughTools are the tools passthrough can serve.
+var PassthroughTools = []string{ToolKube, ToolAWS, ToolGCP, ToolGit, ToolDocker}
 
 // Claude lists the Claude Code config dirs (CLAUDE_CONFIG_DIR values) that
 // `iris install` configures. Empty = just the default (~/.claude, or
@@ -102,6 +115,9 @@ type Source struct {
 	Env      string    `yaml:"env,omitempty"`      // env var of the daemon
 	File     string    `yaml:"file,omitempty"`     // file readable by the daemon
 	Static   string    `yaml:"static,omitempty"`   // tests only
+	// Passthrough: resolve the user's own credential for the requested target
+	// (set on identities synthesised from passthrough.tools).
+	Passthrough bool `yaml:"passthrough,omitempty"`
 }
 
 type Keychain struct {
@@ -167,6 +183,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s: %w", where, err)
 		}
 	}
+	for _, t := range c.Passthrough.Tools {
+		if !contains(PassthroughTools, t) {
+			return fmt.Errorf("passthrough.tools: %q not supported (want %s)", t, strings.Join(PassthroughTools, ", "))
+		}
+	}
 	if len(c.Approval.Options) == 0 {
 		return errors.New("approval.options must not be empty")
 	}
@@ -191,8 +212,11 @@ func (s Source) Validate() error {
 	if s.Keychain != nil {
 		n++
 	}
+	if s.Passthrough {
+		n++
+	}
 	if n != 1 {
-		return fmt.Errorf("source must set exactly one of command, op, keychain, env, file (got %d)", n)
+		return fmt.Errorf("source must set exactly one of command, op, keychain, env, file, passthrough (got %d)", n)
 	}
 	return nil
 }
@@ -209,6 +233,8 @@ func (s Source) Describe() string {
 		return "env: " + s.Env
 	case s.File != "":
 		return "file: " + s.File
+	case s.Passthrough:
+		return "your own credentials (passthrough)"
 	default:
 		return "static"
 	}
@@ -221,6 +247,46 @@ func (c *Config) Find(tool, target string) (Identity, bool) {
 		}
 	}
 	return Identity{}, false
+}
+
+// Resolve picks the identity for a request: an explicit identity for
+// (tool, target) first, then passthrough of the user's own credential.
+func (c *Config) Resolve(tool, target string) (Identity, bool) {
+	if id, ok := c.Find(tool, target); ok {
+		return id, true
+	}
+	if !c.PassthroughEnabled(tool) || ValidateTarget(target) != nil {
+		return Identity{}, false
+	}
+	id := Identity{Tool: tool, Target: target, Scope: "your credentials", Source: Source{Passthrough: true}}
+	if tool == ToolGCP {
+		// gcloud hands out cached tokens that may be close to expiry; re-fetch often.
+		id.MaxTTL = Duration{10 * time.Minute}
+	}
+	return id, true
+}
+
+func (c *Config) PassthroughEnabled(tool string) bool { return contains(c.Passthrough.Tools, tool) }
+
+// Uses reports whether Claude should be wired up for a tool at all.
+func (c *Config) Uses(tool string) bool {
+	return c.PassthroughEnabled(tool) || len(c.ByTool(tool)) > 0
+}
+
+// ValidateTarget rejects targets that could smuggle flags or protocol lines
+// into the host-side commands passthrough runs (the target comes from inside
+// the sandbox).
+func ValidateTarget(t string) error {
+	if t == "" || len(t) > 256 || strings.HasPrefix(t, "-") {
+		return fmt.Errorf("invalid target %q", t)
+	}
+	for _, r := range t {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-:@/+", r)
+		if !ok {
+			return fmt.Errorf("invalid character %q in target", r)
+		}
+	}
+	return nil
 }
 
 func (c *Config) ByTool(tool string) []Identity {

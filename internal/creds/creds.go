@@ -39,6 +39,7 @@ func Parse(id config.Identity, raw []byte, now time.Time) (*protocol.Credential,
 				ExpirationTimestamp   string `json:"expirationTimestamp"`
 				ClientCertificateData string `json:"clientCertificateData"`
 				ClientKeyData         string `json:"clientKeyData"`
+				LongLived             bool   `json:"iris.longLived"`
 			} `json:"status"`
 		}
 		if err := json.Unmarshal([]byte(s), &ec); err != nil {
@@ -50,6 +51,7 @@ func Parse(id config.Identity, raw []byte, now time.Time) (*protocol.Credential,
 			c.Fields["clientKeyData"] = ec.Status.ClientKeyData
 		}
 		c.ExpiresAt = parseTime(ec.Status.ExpirationTimestamp)
+		c.LongLived = ec.Status.LongLived
 	case "aws-process", "aws-sts":
 		var p struct {
 			AccessKeyID     string `json:"AccessKeyId"`
@@ -95,6 +97,9 @@ func Parse(id config.Identity, raw []byte, now time.Time) (*protocol.Credential,
 				c.ExpiresAt = parseTime(v)
 				break
 			}
+		}
+		if v, ok := m["long_lived"].(bool); ok {
+			c.LongLived = v
 		}
 		if v, ok := m["expires_in"].(float64); ok && c.ExpiresAt.IsZero() {
 			c.ExpiresAt = now.Add(time.Duration(v) * time.Second)

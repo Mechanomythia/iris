@@ -147,7 +147,12 @@ struct ApprovalView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 HStack(spacing: Hy.s2) {
-                    if let scope = event.scope, !scope.isEmpty { HyTag(text: scope) }
+                    if event.passthrough == true {
+                        // Class K: your own identity is in play, read carefully.
+                        HyTag(text: "Your credentials", kind: .k)
+                    } else if let scope = event.scope, !scope.isEmpty {
+                        HyTag(text: scope)
+                    }
                     status
                 }
                 .padding(.top, 2)

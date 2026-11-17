@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -24,6 +25,9 @@ type Server struct {
 }
 
 func listen(path string) (net.Listener, error) {
+	if len(path) > 103 { // sun_path is 104 bytes on macOS
+		return nil, fmt.Errorf("socket path %s is %d bytes; Unix sockets allow at most 103 (use a shorter IRIS_HOME)", path, len(path))
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}

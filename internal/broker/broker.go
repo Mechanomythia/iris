@@ -14,6 +14,7 @@ import (
 	"github.com/mechanomythia/iris/internal/config"
 	"github.com/mechanomythia/iris/internal/creds"
 	"github.com/mechanomythia/iris/internal/grants"
+	"github.com/mechanomythia/iris/internal/passthrough"
 	"github.com/mechanomythia/iris/internal/protocol"
 	"github.com/mechanomythia/iris/internal/secrets"
 )
@@ -175,10 +176,10 @@ func isWordByte(c byte) bool {
 // Credential is the whole gate.
 func (b *Broker) Credential(ctx context.Context, tool, target string, p ProcInfo) (*protocol.Credential, error) {
 	cfg := b.Config()
-	id, ok := cfg.Find(tool, target)
+	id, ok := cfg.Resolve(tool, target)
 	if !ok {
 		b.Audit.Write(audit.Entry{Event: "error", Tool: tool, Target: target, Profile: p.Profile, PID: p.PID, Cwd: p.Cwd, Detail: "no identity configured"})
-		return nil, fmt.Errorf("iris: no identity configured for %s/%s (add it to ~/.config/iris/config.yaml or run `iris provision`)", tool, target)
+		return nil, fmt.Errorf("iris: no identity configured for %s/%s (run `iris passthrough on` to use your own credentials, or `iris provision`)", tool, target)
 	}
 
 	g, err := b.ensureGrant(ctx, cfg, id, p)
@@ -199,8 +200,15 @@ func (b *Broker) Credential(ctx context.Context, tool, target string, p ProcInfo
 	if g.ExpiresAt.Before(out.ExpiresAt) {
 		out.ExpiresAt = g.ExpiresAt
 	}
+	detail := "expires " + out.ExpiresAt.UTC().Format(time.RFC3339)
+	if out.LongLived {
+		detail += "; long-lived secret (valid beyond the grant)"
+	}
+	if id.Source.Passthrough {
+		detail += "; your credentials"
+	}
 	b.Audit.Write(audit.Entry{Event: "issue", Tool: tool, Target: target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,
-		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Detail: "expires " + out.ExpiresAt.UTC().Format(time.RFC3339)})
+		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Detail: detail})
 	return &out, nil
 }
 
@@ -293,7 +301,13 @@ func (b *Broker) mint(ctx context.Context, id config.Identity) (*protocol.Creden
 	}
 	b.cacheMu.Unlock()
 
-	raw, err := secrets.Fetch(ctx, id.Source)
+	var raw []byte
+	var err error
+	if id.Source.Passthrough {
+		raw, err = passthrough.Fetch(ctx, id.Tool, id.Target)
+	} else {
+		raw, err = secrets.Fetch(ctx, id.Source)
+	}
 	if err != nil {
 		return nil, err
 	}

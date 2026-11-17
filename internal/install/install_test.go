@@ -233,3 +233,86 @@ func TestOldManifestFormat(t *testing.T) {
 		t.Fatal("v0.1.0 manifest not migrated")
 	}
 }
+
+func TestPassthroughConfigs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("IRIS_HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	KubeContexts = func() ([]KubeContext, string, error) {
+		return []KubeContext{
+			{Name: "gke_p_europe-west4_kvasir", Namespace: "apps", Cluster: map[string]any{"server": "https://gke"}},
+			{Name: "staging", Cluster: map[string]any{"server": "https://old"}},
+			{Name: "bad name", Cluster: map[string]any{"server": "https://x"}},
+		}, "gke_p_europe-west4_kvasir", nil
+	}
+	KubeClusterLookup = func(string) (map[string]any, error) { return map[string]any{"server": "https://explicit"}, nil }
+	AWSProfiles = func() ([]AWSProfile, error) {
+		return []AWSProfile{{Name: "default", Region: "eu-west-1"}, {Name: "prod-sso"}}, nil
+	}
+	GcloudProject = func() string { return "my-proj" }
+
+	cfg := config.Default()
+	cfg.Passthrough.Tools = config.PassthroughTools
+	cfg.Identities = []config.Identity{{Tool: "kube", Target: "staging", Scope: "read", Source: config.Source{Static: "x"}}}
+	os.MkdirAll(paths.ConfigDir(), 0o700)
+	config.Save(paths.ConfigFile(), cfg)
+	res, err := Install(InstallOptions{Options: Options{IrisBin: "/b/iris", HelperBin: "/b/iris-helper"}, NoLaunchd: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kc, _ := os.ReadFile(paths.ClaudeKubeconfig())
+	for _, w := range []string{"current-context: gke_p_europe-west4_kvasir", "- gke_p_europe-west4_kvasir", "namespace: apps", "https://explicit"} {
+		if !strings.Contains(string(kc), w) {
+			t.Errorf("kubeconfig missing %q:\n%s", w, kc)
+		}
+	}
+	if strings.Contains(string(kc), "https://old") || strings.Contains(string(kc), "bad name") {
+		t.Errorf("explicit identity should override passthrough; bad names skipped:\n%s", kc)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), `"bad name" skipped`) {
+		t.Errorf("warnings: %v", res.Warnings)
+	}
+	aws, _ := os.ReadFile(paths.ClaudeAWSConfig())
+	if !strings.Contains(string(aws), "[default]\ncredential_process = /b/iris-helper aws default\nregion = eu-west-1") || !strings.Contains(string(aws), "[profile prod-sso]") {
+		t.Errorf("aws:\n%s", aws)
+	}
+	props, _ := os.ReadFile(filepath.Join(paths.ClaudeGcloudDir(), "properties"))
+	if !strings.Contains(string(props), "project = my-proj") {
+		t.Errorf("gcloud props:\n%s", props)
+	}
+	dc, _ := os.ReadFile(filepath.Join(paths.ClaudeDockerDir(), "config.json"))
+	if !strings.Contains(string(dc), `"credsStore": "iris"`) {
+		t.Errorf("docker:\n%s", dc)
+	}
+	git, _ := os.ReadFile(paths.ClaudeGitconfig())
+	if !strings.Contains(string(git), "insteadOf = git@github.com:") {
+		t.Errorf("git:\n%s", git)
+	}
+	s, _ := os.ReadFile(paths.ClaudeSettings())
+	for _, w := range []string{"KUBECONFIG", "AWS_CONFIG_FILE", "CLOUDSDK_CONFIG", "GIT_CONFIG_GLOBAL", "DOCKER_CONFIG"} {
+		if !strings.Contains(string(s), w) {
+			t.Errorf("settings missing env %s", w)
+		}
+	}
+}
+
+func TestStarterConfigIsValid(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	os.WriteFile(p, []byte(StarterConfig), 0o600)
+	c, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Passthrough.Tools) != 5 || !c.Approval.TouchID {
+		t.Fatalf("%+v", c)
+	}
+	if id, ok := c.Resolve("kube", "any-context"); !ok || !id.Source.Passthrough {
+		t.Fatal("passthrough resolve")
+	}
+	if _, ok := c.Resolve("kube", "--evil"); ok {
+		t.Fatal("bad target resolved")
+	}
+	if _, ok := c.Resolve("http", "api.x"); ok {
+		t.Fatal("http has no passthrough")
+	}
+}

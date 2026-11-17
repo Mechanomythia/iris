@@ -13,6 +13,7 @@ import (
 	"github.com/mechanomythia/iris/internal/approval"
 	"github.com/mechanomythia/iris/internal/audit"
 	"github.com/mechanomythia/iris/internal/config"
+	"github.com/mechanomythia/iris/internal/passthrough"
 	"github.com/mechanomythia/iris/internal/protocol"
 )
 
@@ -241,5 +242,46 @@ func TestContextMatchesTool(t *testing.T) {
 	}
 	if containsWord("digit", "git") || !containsWord("cd x && git push", "git") {
 		t.Fatal("word match")
+	}
+}
+
+func TestPassthroughOnlyRunsAfterApproval(t *testing.T) {
+	e := start(t)
+	cfg := e.b.Config()
+	cfg.Passthrough.Tools = []string{"kube"}
+	var ran atomic.Int32
+	old := passthrough.Runner
+	t.Cleanup(func() { passthrough.Runner = old })
+	passthrough.Runner = func(_ context.Context, _ []string, _ []byte, name string, args ...string) ([]byte, error) {
+		ran.Add(1)
+		if name == "kubectl" {
+			return []byte(`{"users":[{"user":{"exec":{"command":"plugin"}}}]}`), nil
+		}
+		return []byte(`{"kind":"ExecCredential","status":{"token":"mine","expirationTimestamp":"2099-01-01T00:00:00Z"}}`), nil
+	}
+	var sawPassthrough atomic.Bool
+	e.b.Hub.Fallback = func(_ context.Context, r approval.Request) (string, error) {
+		if ran.Load() != 0 {
+			t.Error("host credential commands ran before approval")
+		}
+		sawPassthrough.Store(approval.Event(r).Passthrough)
+		return e.answer.Load().(string), nil
+	}
+	e.answer.Store("deny")
+	if r := e.cred(t, "kube", "gke_p_z_c"); r.OK || ran.Load() != 0 {
+		t.Fatalf("deny must not touch your credentials: %+v ran=%d", r, ran.Load())
+	}
+	e.answer.Store("once")
+	r := e.cred(t, "kube", "gke_p_z_c")
+	if !r.OK || r.Credential.Token != "mine" || !sawPassthrough.Load() {
+		t.Fatalf("%+v passthrough=%v", r, sawPassthrough.Load())
+	}
+	ev := e.auditEvents(t)
+	if ev[len(ev)-1] != "issue" {
+		t.Fatal(ev)
+	}
+	last := audit.Open(e.auditP).Tail(1)
+	if !strings.Contains(string(last[0]), "your credentials") {
+		t.Fatalf("audit detail: %s", last[0])
 	}
 }

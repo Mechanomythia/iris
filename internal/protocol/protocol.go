@@ -55,10 +55,13 @@ type Response struct {
 
 // Credential is what the helper turns into tool-specific output.
 type Credential struct {
-	Kind      string            `json:"kind"` // kube | aws | gcp | git | docker
-	Token     string            `json:"token,omitempty"`
-	Username  string            `json:"username,omitempty"`
-	ExpiresAt time.Time         `json:"expiresAt"`
+	Kind      string    `json:"kind"` // kube | aws | gcp | git | docker
+	Token     string    `json:"token,omitempty"`
+	Username  string    `json:"username,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	// LongLived: the secret itself does not expire (static token, client
+	// cert, PAT); revoking the grant stops iris handing it out, not its use.
+	LongLived bool              `json:"longLived,omitempty"`
 	Fields    map[string]string `json:"fields,omitempty"` // aws keys, kube client cert, ...
 }
 
@@ -92,6 +95,7 @@ type Event struct {
 	Target      string       `json:"target,omitempty"`
 	Scope       string       `json:"scope,omitempty"`
 	Label       string       `json:"label,omitempty"`
+	Passthrough bool         `json:"passthrough,omitempty"` // uses the user's own credentials
 	Profile     string       `json:"profile,omitempty"`
 	Command     string       `json:"command,omitempty"`
 	ProcessPID  int          `json:"pid,omitempty"`

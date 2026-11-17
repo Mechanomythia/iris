@@ -15,6 +15,7 @@ struct BrokerEvent: Codable {
     var scope: String?
     var label: String?
     var profile: String?
+    var passthrough: Bool?
     var command: String?
     var pid: Int?
     var cwd: String?

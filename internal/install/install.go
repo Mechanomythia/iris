@@ -327,12 +327,30 @@ func plist(irisBin string) string {
 	<key>KeepAlive</key><true/>
 	<key>ProcessType</key><string>Interactive</string>
 	<key>EnvironmentVariables</key>
-	<dict><key>PATH</key><string>%s</string></dict>
+	<dict><key>PATH</key><string>%s</string>%s</dict>
 	<key>StandardOutPath</key><string>%s</string>
 	<key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, paths.LaunchAgentLabel, esc(irisBin), esc(path), esc(paths.DaemonLog()), esc(paths.DaemonLog()))
+`, paths.LaunchAgentLabel, esc(irisBin), esc(path), capturedEnv(esc), esc(paths.DaemonLog()), esc(paths.DaemonLog()))
+}
+
+// hostEnv are variables from your shell the broker needs to find YOUR
+// credentials (launchd starts it with an almost empty environment).
+var hostEnv = []string{"KUBECONFIG", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_PROFILE",
+	"CLOUDSDK_CONFIG", "DOCKER_CONFIG", "GIT_CONFIG_GLOBAL", "USE_GKE_GCLOUD_AUTH_PLUGIN"}
+
+func capturedEnv(esc func(string) string) string {
+	var b strings.Builder
+	for _, k := range hostEnv {
+		v := os.Getenv(k)
+		// Skip values pointing at Claude's generated configs (install run from inside Claude).
+		if v == "" || strings.Contains(v, paths.ClaudeDir()) {
+			continue
+		}
+		fmt.Fprintf(&b, "<key>%s</key><string>%s</string>", k, esc(v))
+	}
+	return b.String()
 }
 
 func InstallLaunchAgent(irisBin string) error {

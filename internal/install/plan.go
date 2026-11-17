@@ -110,23 +110,23 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	if o.Profile != "" {
 		env["IRIS_PROFILE"] = o.Profile
 	}
-	if len(cfg.ByTool(config.ToolKube)) > 0 {
+	if cfg.Uses(config.ToolKube) {
 		env["KUBECONFIG"] = paths.ClaudeKubeconfig()
 	}
-	if len(cfg.ByTool(config.ToolAWS)) > 0 {
+	if cfg.Uses(config.ToolAWS) {
 		env["AWS_CONFIG_FILE"] = paths.ClaudeAWSConfig()
 		env["AWS_SHARED_CREDENTIALS_FILE"] = "/dev/null"
 	}
-	if len(cfg.ByTool(config.ToolGCP)) > 0 {
+	if cfg.Uses(config.ToolGCP) {
 		env["CLOUDSDK_CONFIG"] = paths.ClaudeGcloudDir()
 		try(add("sandbox.filesystem.allowWrite", paths.ClaudeGcloudDir())) // gcloud writes logs/cache here
 	}
-	if len(cfg.ByTool(config.ToolGit)) > 0 {
+	if cfg.Uses(config.ToolGit) {
 		env["GIT_CONFIG_GLOBAL"] = paths.ClaudeGitconfig()
 		env["GIT_TERMINAL_PROMPT"] = "0"
 		env["GH_CONFIG_DIR"] = paths.ClaudeDir() + "/gh"
 	}
-	if len(cfg.ByTool(config.ToolDocker)) > 0 {
+	if cfg.Uses(config.ToolDocker) {
 		env["DOCKER_CONFIG"] = paths.ClaudeDockerDir()
 	}
 	if cfg.Proxy.Enabled {

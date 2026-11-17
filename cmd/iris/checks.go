@@ -57,6 +57,19 @@ func cmdDoctor() error {
 			}
 		}
 	}
+	if len(cfg.Passthrough.Tools) > 0 {
+		c.ok("passthrough on for %s (your own credentials, approved per use)", strings.Join(cfg.Passthrough.Tools, ", "))
+		need := map[string]string{config.ToolKube: "kubectl", config.ToolAWS: "aws", config.ToolGCP: "gcloud", config.ToolGit: "git"}
+		for _, t := range cfg.Passthrough.Tools {
+			if bin := need[t]; bin != "" {
+				if _, err := exec.LookPath(bin); err != nil {
+					c.warn("passthrough %s: `%s` not on PATH (the broker resolves your credentials with it)", t, bin)
+				}
+			}
+		}
+	} else if len(cfg.Identities) == 0 {
+		c.warn("no passthrough and no identities: Claude can't use any credential (`iris passthrough on`)")
+	}
 	if id, ok := firstHTTP(cfg); ok && !cfg.Proxy.Enabled {
 		c.fail("%s is an http identity but proxy.enabled is false", id)
 	}

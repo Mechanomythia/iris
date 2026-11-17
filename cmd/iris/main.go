@@ -33,6 +33,7 @@ const usage = `iris: credential broker for Claude Code
 Setup
   iris install [--detect] [--claude-dir D]  configure Claude Code (all config dirs) + start the broker
   iris uninstall [--claude-dir D] [--purge] revert what install did (one dir or all)
+  iris passthrough on|off|status [tools]    let Claude use YOUR credentials, approved per use
   iris claude list|detect|add|remove        manage Claude config dirs (aliases with CLAUDE_CONFIG_DIR)
   iris link [--dir ~/.local/bin]            put iris on your PATH (symlink)
   iris provision kube|gcp|aws|github|secret create a Claude-only identity (iris provision <kind> -h)
@@ -85,6 +86,8 @@ func main() {
 		err = cmdProvision(args)
 	case "claude":
 		err = cmdClaude(args)
+	case "passthrough":
+		err = cmdPassthrough(args)
 	case "link":
 		err = cmdLink(args)
 	case "doctor":
@@ -120,6 +123,7 @@ func cmdInstall(args []string) error {
 	noLaunchd := fs.Bool("no-launchd", false, "don't install the launchd agent (run `iris daemon` yourself)")
 	extraEnv := fs.String("deny-env", "", "extra comma-separated env vars to hide from the sandbox")
 	detect := fs.Bool("detect", false, "also configure every Claude config dir found by `iris claude detect`")
+	pass := fs.Bool("passthrough", false, "let Claude use your own credentials (all tools), approved per use")
 	var dirs multiFlag
 	fs.Var(&dirs, "claude-dir", "Claude config dir (CLAUDE_CONFIG_DIR) to configure; repeatable, saved to config")
 	_ = fs.Parse(args)
@@ -132,6 +136,19 @@ func cmdInstall(args []string) error {
 	}
 	if len(dirs) > 0 {
 		if err := addClaudeDirs(dirs, *dry); err != nil {
+			return err
+		}
+	}
+	if *pass && !*dry {
+		if _, err := install.EnsureConfig(""); err != nil {
+			return err
+		}
+		cfg, err := config.Load("")
+		if err != nil {
+			return err
+		}
+		cfg.Passthrough.Tools = config.PassthroughTools
+		if err := config.Save("", cfg); err != nil {
 			return err
 		}
 	}
@@ -197,8 +214,11 @@ func runInstall(dry, noLaunchd bool, extraEnv []string, verbose bool) error {
 			fmt.Println("`iris` is not on your PATH: run `" + irisBin + " link`")
 		}
 		cfg, _ := config.Load("")
-		if cfg != nil && len(cfg.Identities) == 0 {
-			fmt.Println("No identities yet. Add one with `iris provision ...` or edit", paths.Tilde(paths.ConfigFile()))
+		if cfg != nil && len(cfg.Identities) == 0 && len(cfg.Passthrough.Tools) == 0 {
+			fmt.Println("Claude can't use any credential yet. Use your own (approved per use): `iris passthrough on`")
+			fmt.Println("or create Claude-only identities: `iris provision ...`")
+		} else if cfg != nil && len(cfg.Passthrough.Tools) > 0 {
+			fmt.Println("Passthrough on for", strings.Join(cfg.Passthrough.Tools, ", ")+": Claude uses your own credentials after you allow each request.")
 		}
 	}
 	return nil

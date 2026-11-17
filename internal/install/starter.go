@@ -16,6 +16,14 @@ proxy:
   listen: 127.0.0.1:18899
   allowedHosts: []           # empty = allow all. Claude's own domain allowlist is bypassed when this proxy is on.
 
+# Use YOUR existing credentials (kube contexts, AWS profiles, gcloud, git and
+# docker credential helpers). The sandbox still hides them; every use shows the
+# iris dialog and runs only if you allow it. Remove a tool to stop passing it through.
+passthrough:
+  tools: [kube, aws, gcp, git, docker]
+
+# Optional: narrow Claude-only identities. They take precedence over passthrough
+# for their target. Easiest: iris provision kube|gcp|aws|github ...
 identities: []
 # Examples (prefer narrow, Claude-only identities: see "iris provision"):
 #

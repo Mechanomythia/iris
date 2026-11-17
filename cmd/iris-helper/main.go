@@ -158,6 +158,12 @@ func gcloudShim(args []string) error {
 	if project == "" {
 		project = os.Getenv("IRIS_GCP_DEFAULT_PROJECT")
 	}
+	if project == "" {
+		project = projectFromProperties()
+	}
+	if project == "" {
+		project = "default" // passthrough: a label for the popup; gcloud uses your account
+	}
 	if project == "" || passthrough(rest) {
 		return run(real, rest, nil)
 	}
@@ -187,6 +193,25 @@ func passthrough(a []string) bool {
 		return true
 	}
 	return false
+}
+
+// projectFromProperties reads core/project from Claude's gcloud config dir.
+func projectFromProperties() string {
+	dir := os.Getenv("CLOUDSDK_CONFIG")
+	if dir == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "properties"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok && strings.TrimSpace(k) == "project" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func projectFromArgs(a []string) string {

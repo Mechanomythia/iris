@@ -162,7 +162,7 @@ func resolve(r Request, choice, via string) Decision {
 func Event(r Request) protocol.Event {
 	ev := protocol.Event{
 		Type: "approval_request", ID: r.ID,
-		Tool: r.Identity.Tool, Target: r.Identity.Target, Scope: r.Identity.Scope, Label: r.Identity.Label(), Profile: r.Profile,
+		Tool: r.Identity.Tool, Target: r.Identity.Target, Scope: r.Identity.Scope, Label: r.Identity.Label(), Profile: r.Profile, Passthrough: r.Identity.Source.Passthrough,
 		Command: r.Command, ProcessPID: r.PID, ProcessCwd: r.Cwd, ProcessArgv: r.Argv,
 		TouchID: r.TouchID, Deadline: r.Deadline,
 	}

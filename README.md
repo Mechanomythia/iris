@@ -95,6 +95,39 @@ The profile label comes from inside the sandbox (`IRIS_PROFILE`), so it keeps gr
 - hooks: `PreToolUse` sends the pending command to the popup, `SessionStart` puts the shim dir on `PATH`, `SessionEnd` revokes "until session end" grants
 - with the proxy enabled: `httpProxyPort` and a CA bundle (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …)
 
+## Your own credentials, approved per use (passthrough)
+
+This is the default. Claude Code normally runs as **you**: anything it runs can use your kube contexts, AWS profiles, gcloud login and git credentials, and you don't see it happen. With passthrough on, the sandbox still hides all of those, and every use goes through the iris dialog first:
+
+```bash
+iris passthrough on            # kube, aws, gcp, git, docker (the starter config has this already)
+```
+
+```bash
+iris passthrough on kube,aws   # or just some tools
+```
+
+```bash
+iris passthrough status
+```
+
+- Claude sees the same kube contexts and AWS profiles you have, under the same names. Each one points at `iris-helper` instead of a real credential.
+- When something needs a credential (`kubectl get pods`, `aws s3 ls`, `git push`), the popup shows the context or profile, the command, the process, and an orange **Your credentials** tag. Deny and nothing runs. Allow and the broker resolves **your** credential on the host:
+
+| Tool | How your credential is resolved after you allow |
+|---|---|
+| kube | your kubeconfig's user for that context: exec plugin (gke-gcloud-auth-plugin, aws eks, kubelogin…) run on the host, or token / client cert |
+| aws | `aws configure export-credentials` (SSO, assume-role). Long-term keys are swapped for a 1h `get-session-token`, and iris refuses rather than hand out the long-term key |
+| gcp | `gcloud auth print-access-token` for your active account (re-fetched every 10 min) |
+| git | `git credential fill` with your helpers (osxkeychain, gh, manager), never prompting. SSH remotes are rewritten to HTTPS |
+| docker | your `credHelpers` / `credsStore` / `auths` |
+
+- Nothing runs on your side before you click Allow: no SSO browser tabs, no keychain prompts, no exec plugins.
+- The context or profile name comes from inside the sandbox, so it's validated (no leading `-`, no spaces or newlines) and passed as `--context=` / `--profile=`, so it can't smuggle flags.
+- The audit log marks every passthrough issue `your credentials`. If the secret itself doesn't expire (static kube token, client cert, PAT), it also notes `long-lived`, because revoking the grant then stops iris handing it out but not a copy Claude already has.
+- After you add kube contexts or AWS profiles, re-run `iris install` so Claude sees them.
+- Mixing modes works: an identity from `iris provision` takes precedence for its target, and everything else passes through. Use `iris passthrough off kube` to only allow the identities you provisioned for kube.
+
 ## Claude-only identities: `iris provision`
 
 Run these from **your** terminal. Each one creates a narrow identity with your credentials and adds it to the config. The broker then mints short-lived credentials for that identity, never for your personal one.
