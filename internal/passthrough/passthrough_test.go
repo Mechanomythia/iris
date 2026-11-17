@@ -50,7 +50,7 @@ func parse(t *testing.T, tool string, raw []byte) *config.Identity {
 
 func TestKubeExecPlugin(t *testing.T) {
 	calls := fake(t, map[string]string{
-		"kubectl config view": `{"users":[{"user":{"exec":{"apiVersion":"client.authentication.k8s.io/v1beta1","command":"gke-gcloud-auth-plugin","args":["--x"],"env":[{"name":"FOO","value":"bar"}]}}}]}`,
+		"kubectl config view":    `{"users":[{"user":{"exec":{"apiVersion":"client.authentication.k8s.io/v1beta1","command":"gke-gcloud-auth-plugin","args":["--x"],"env":[{"name":"FOO","value":"bar"}]}}}]}`,
 		"gke-gcloud-auth-plugin": `{"kind":"ExecCredential","apiVersion":"client.authentication.k8s.io/v1beta1","status":{"token":"ya29.tok","expirationTimestamp":"2099-01-01T00:00:00Z"}}`,
 	})
 	raw, err := Kube(context.Background(), "gke_proj_europe-west4_kvasir")
