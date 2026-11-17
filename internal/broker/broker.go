@@ -60,6 +60,7 @@ type hookContext struct {
 	cwd     string
 	session string
 	profile string
+	id      string // Claude Code tool_use_id: bounds a "this command" grant
 }
 
 // ProcInfo describes who asked.
@@ -99,17 +100,18 @@ func (b *Broker) Reload() error {
 }
 
 // AddContext records the pending command from the PreToolUse hook. It is
-// shown in the next popup within 60s. Advisory only: anything in the
-// sandbox can also send it, so it is never used for decisions.
-func (b *Broker) AddContext(command, cwd, session, profile string) {
+// shown in prompts while the command runs. Advisory only: anything in the
+// sandbox can also send it, so it is never used to decide; it only labels
+// prompts and scopes "this command" grants.
+func (b *Broker) AddContext(command, cwd, session, profile, id string) {
 	b.ctxMu.Lock()
 	defer b.ctxMu.Unlock()
 	now := b.now()
-	b.contexts = append(b.contexts, hookContext{at: now, command: command, cwd: cwd, session: session, profile: profile})
-	// keep the last 16 within 60s
+	b.contexts = append(b.contexts, hookContext{at: now, command: command, cwd: cwd, session: session, profile: profile, id: id})
+	// keep the last 16 within the command window
 	cut := 0
 	for i, c := range b.contexts {
-		if now.Sub(c.at) > time.Minute {
+		if now.Sub(c.at) > contextWindow(c) {
 			cut = i + 1
 		}
 	}
@@ -117,6 +119,34 @@ func (b *Broker) AddContext(command, cwd, session, profile string) {
 	if len(b.contexts) > 16 {
 		b.contexts = b.contexts[len(b.contexts)-16:]
 	}
+}
+
+// EndContext is called from the PostToolUse hook: the command finished, so
+// its "this command" grants end and it no longer labels prompts.
+func (b *Broker) EndContext(id string) {
+	if id == "" {
+		return
+	}
+	if n := b.Grants.EndCommand(id); n > 0 {
+		b.Hub.Broadcast(protocol.Event{Type: "grants_changed"})
+	}
+	b.ctxMu.Lock()
+	defer b.ctxMu.Unlock()
+	for i, c := range b.contexts {
+		if c.id == id {
+			b.contexts = append(b.contexts[:i], b.contexts[i+1:]...)
+			return
+		}
+	}
+}
+
+// contextWindow: commands with an id stay current until their PostToolUse
+// (capped at 30 min); without one (older hook) only for a minute.
+func contextWindow(c hookContext) time.Duration {
+	if c.id != "" {
+		return 30 * time.Minute
+	}
+	return time.Minute
 }
 
 // toolWords: commands that plausibly trigger a tool's credential helper.
@@ -130,31 +160,34 @@ var toolWords = map[string][]string{
 	"ssh":    {"git", "ssh", "scp", "rsync", "sftp"},
 }
 
-// contextFor picks the most recent hook command (last 60s) from the same
-// profile that mentions a word associated with the tool; otherwise the
-// latest command, labelled.
-func (b *Broker) contextFor(tool, profile string) string {
+// contextFor picks the running command (same profile) that mentions a word
+// associated with the tool; otherwise the latest command, labelled. Returns
+// the command text and its tool_use_id ("" when unknown).
+func (b *Broker) contextFor(tool, profile string) (string, string) {
 	b.ctxMu.Lock()
 	defer b.ctxMu.Unlock()
 	now := b.now()
 	for i := len(b.contexts) - 1; i >= 0; i-- {
 		c := b.contexts[i]
-		if now.Sub(c.at) > time.Minute {
-			break
+		if now.Sub(c.at) > contextWindow(c) {
+			continue
 		}
 		if profile != "" && c.profile != "" && c.profile != profile {
 			continue
 		}
 		for _, w := range toolWords[tool] {
 			if containsWord(c.command, w) {
-				return c.command
+				return c.command, c.id
 			}
 		}
 	}
-	if n := len(b.contexts); n > 0 && now.Sub(b.contexts[n-1].at) <= time.Minute {
-		return "(latest Bash command) " + b.contexts[n-1].command
+	for i := len(b.contexts) - 1; i >= 0; i-- {
+		c := b.contexts[i]
+		if now.Sub(c.at) <= contextWindow(c) && (profile == "" || c.profile == "" || c.profile == profile) {
+			return "(latest Bash command) " + c.command, c.id
+		}
 	}
-	return ""
+	return "", ""
 }
 
 func containsWord(s, w string) bool {
@@ -273,6 +306,14 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		}
 		opts = append(opts, o)
 	}
+	command, cmdID := b.contextFor(id.Tool, p.Profile)
+	if cmdID != "" {
+		for i := range opts {
+			if opts[i].Once {
+				opts[i].Label = "this command" // covers every request the command makes
+			}
+		}
+	}
 	if id.Tool == config.ToolNetwork {
 		always, _ := config.ParseOption("always", 0)
 		opts = append(opts, always)
@@ -282,8 +323,9 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		timeout = time.Minute
 	}
 	req := approval.Request{
-		ID: grants.NewID(), Identity: id, Profile: p.Profile, Command: b.contextFor(id.Tool, p.Profile),
-		PID: p.PID, Cwd: p.Cwd, Argv: p.Argv, Options: opts, TouchID: cfg.Approval.TouchID,
+		ID: grants.NewID(), Identity: id, Profile: p.Profile, Command: command,
+		Recent: b.Grants.Recent(id.Tool, id.Target, p.Profile, 10*time.Minute),
+		PID:    p.PID, Cwd: p.Cwd, Argv: p.Argv, Options: opts, TouchID: cfg.Approval.TouchID,
 		Deadline: b.now().Add(timeout),
 	}
 	d := b.Hub.Ask(ctx, req)
@@ -299,7 +341,12 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 	if d.Option.Persist && b.OnPersist != nil {
 		b.OnPersist(id)
 	}
-	g := b.Grants.Add(id.Tool, id.Target, p.Profile, id.Scope, d.Option.Name, d.Option.TTL, d.Option.Once, d.Option.Session)
+	var g *grants.Grant
+	if d.Option.Once && cmdID != "" {
+		g = b.Grants.AddForCommand(id.Tool, id.Target, p.Profile, id.Scope, "command", cmdID)
+	} else {
+		g = b.Grants.Add(id.Tool, id.Target, p.Profile, id.Scope, d.Option.Name, d.Option.TTL, d.Option.Once, d.Option.Session)
+	}
 	b.Audit.Write(audit.Entry{Event: "grant", Tool: id.Tool, Target: id.Target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,
 		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Command: req.Command, Detail: "via " + d.Via})
 	b.Hub.Broadcast(protocol.Event{Type: "grants_changed"})

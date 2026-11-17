@@ -190,6 +190,11 @@ struct ApprovalView: View {
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
+                if let n = event.recent, n >= 2 {
+                    Text("You allowed this \(n)× in the last 10 min. A time grant covers repeats.")
+                        .font(Hy.ui(11.5))
+                        .foregroundStyle(Hy.classG)
+                }
                 HStack(spacing: Hy.s2) {
                     if event.passthrough == true {
                         // Class K: your own identity is in play, read carefully.

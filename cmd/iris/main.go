@@ -497,7 +497,7 @@ func cmdHook(args []string) error {
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	profile := fs.String("profile", "", "Claude config dir label")
 	if len(args) == 0 {
-		return errors.New("usage: iris hook pre-tool-use|session-start|session-end [--profile name]")
+		return errors.New("usage: iris hook pre-tool-use|post-tool-use|session-start|session-end [--profile name]")
 	}
 	event := args[0]
 	_ = fs.Parse(args[1:])
@@ -505,6 +505,7 @@ func cmdHook(args []string) error {
 		SessionID string `json:"session_id"`
 		Cwd       string `json:"cwd"`
 		ToolName  string `json:"tool_name"`
+		ToolUseID string `json:"tool_use_id"`
 		ToolInput struct {
 			Command string `json:"command"`
 		} `json:"tool_input"`
@@ -516,7 +517,12 @@ func cmdHook(args []string) error {
 	case "pre-tool-use":
 		if in.ToolName == "Bash" && in.ToolInput.Command != "" {
 			_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "context", Command: in.ToolInput.Command,
-				Cwd: in.Cwd, SessionID: in.SessionID, Profile: *profile}, 2*time.Second)
+				Cwd: in.Cwd, SessionID: in.SessionID, Profile: *profile, ToolUseID: in.ToolUseID}, 2*time.Second)
+		}
+	case "post-tool-use":
+		// The command finished: its "this command" approvals end.
+		if in.ToolName == "Bash" && in.ToolUseID != "" {
+			_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "context-end", ToolUseID: in.ToolUseID, Profile: *profile}, 2*time.Second)
 		}
 	case "session-start":
 		if f := os.Getenv("CLAUDE_ENV_FILE"); f != "" {

@@ -34,6 +34,7 @@ type Request struct {
 	// context (PreToolUse hook)
 	Command   string `json:"command,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
+	ToolUseID string `json:"toolUseId,omitempty"` // context / context-end
 
 	// control
 	ID     string `json:"id,omitempty"`     // revoke / decision
@@ -104,6 +105,7 @@ type Event struct {
 	Options     []OptionInfo `json:"options,omitempty"`
 	TouchID     bool         `json:"touchID,omitempty"`
 	Deadline    time.Time    `json:"deadline,omitempty"`
+	Recent      int          `json:"recent,omitempty"` // approved this N times in the last 10 min
 }
 
 type OptionInfo struct {

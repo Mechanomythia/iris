@@ -253,6 +253,13 @@ func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostpor
 	}
 
 	if id, ok := p.identityFor(host); ok {
+		for _, prefix := range id.BlockPaths {
+			if strings.HasPrefix(in.URL.Path, prefix) {
+				// Telemetry and the like: never worth a prompt or your token.
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
 		cred, err := p.B.Credential(in.Context(), config.ToolHTTP, host, broker.ProcInfo{Argv: []string{in.Method + " " + scheme + "://" + hostport + in.URL.Path}})
 		if err != nil {
 			http.Error(w, "iris proxy: "+err.Error(), http.StatusForbidden)

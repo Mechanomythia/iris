@@ -13,26 +13,92 @@ import (
 )
 
 type Grant struct {
-	ID        string
-	Tool      string
-	Target    string
-	Scope     string
-	Profile   string
-	Option    string
-	Once      bool
-	Session   bool
+	ID      string
+	Tool    string
+	Target  string
+	Scope   string
+	Profile string
+	Option  string
+	Once    bool
+	Session bool
+	// Command binds the grant to one Bash command (Claude Code's tool use
+	// id): it covers every request that command makes, until it ends.
+	Command   string
 	GrantedAt time.Time
 	ExpiresAt time.Time
 	Uses      int
 }
 
 type Store struct {
-	mu  sync.Mutex
-	g   map[string]*Grant // key tool/target@profile
-	now func() time.Time
+	mu      sync.Mutex
+	g       map[string]*Grant // key tool/target@profile
+	now     func() time.Time
+	history map[string][]time.Time // approvals per key, for the "allowed N times" hint
 }
 
-func New() *Store { return &Store{g: map[string]*Grant{}, now: time.Now} }
+func New() *Store {
+	return &Store{g: map[string]*Grant{}, now: time.Now, history: map[string][]time.Time{}}
+}
+
+// CommandMaxTTL caps a command-bound grant when the command's end is never
+// reported (no PostToolUse hook).
+const CommandMaxTTL = 10 * time.Minute
+
+// AddForCommand records a grant that covers every request of one command
+// until EndCommand(cmd) or CommandMaxTTL.
+func (s *Store) AddForCommand(tool, target, profile, scope, option, cmd string) *Grant {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	g := &Grant{ID: NewID(), Tool: tool, Target: target, Profile: profile, Scope: scope, Option: option,
+		Command: cmd, GrantedAt: now, ExpiresAt: now.Add(CommandMaxTTL)}
+	k := key(tool, target, profile)
+	s.g[k] = g
+	s.note(k, now)
+	return g
+}
+
+// EndCommand drops the grants bound to a finished command.
+func (s *Store) EndCommand(cmd string) int {
+	if cmd == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for k, g := range s.g {
+		if g.Command == cmd {
+			delete(s.g, k)
+			n++
+		}
+	}
+	return n
+}
+
+func (s *Store) note(k string, t time.Time) {
+	h := append(s.history[k], t)
+	cut := 0
+	for i, x := range h {
+		if t.Sub(x) > time.Hour {
+			cut = i + 1
+		}
+	}
+	s.history[k] = h[cut:]
+}
+
+// Recent counts approvals for (tool, target, profile) within window.
+func (s *Store) Recent(tool, target, profile string, window time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	n := 0
+	for _, t := range s.history[key(tool, target, profile)] {
+		if now.Sub(t) <= window {
+			n++
+		}
+	}
+	return n
+}
 
 // SetClock is for tests.
 func (s *Store) SetClock(f func() time.Time) { s.now = f }
@@ -60,6 +126,7 @@ func (s *Store) Add(tool, target, profile, scope, option string, ttl time.Durati
 		g.ExpiresAt = now.Add(time.Minute)
 	}
 	s.g[key(tool, target, profile)] = g
+	s.note(key(tool, target, profile), now)
 	return g
 }
 

@@ -492,8 +492,10 @@ func GitLab(ctx context.Context, r *Runner, o GitLabOptions) (config.Identity, e
 		Tool: config.ToolHTTP, Target: o.Host, Scope: "GitLab API (your token)",
 		Header: "Authorization", ValueTemplate: "Bearer {{token}}",
 		RemoveHeaders: []string{"PRIVATE-TOKEN", "JOB-TOKEN"},
-		SandboxEnv:    map[string]string{"GITLAB_TOKEN": "iris-injects-the-real-token", "GITLAB_HOST": o.Host},
-		Note:          "provisioned by iris: glab in the sandbox uses a placeholder token; the proxy injects yours",
+		SandboxEnv: map[string]string{"GITLAB_TOKEN": "iris-injects-the-real-token", "GITLAB_HOST": o.Host,
+			"GLAB_SEND_TELEMETRY": "false"},
+		BlockPaths: []string{"/api/v4/usage_data/"}, // glab telemetry: no prompt, no token
+		Note:       "provisioned by iris: glab in the sandbox uses a placeholder token; the proxy injects yours",
 	}
 	if o.Paste {
 		id.Source = config.Source{Keychain: &config.Keychain{Service: "iris", Account: "http/" + o.Host}}

@@ -23,6 +23,7 @@ struct BrokerEvent: Codable {
     var options: [OptionInfo]?
     var touchID: Bool?
     var deadline: Date?
+    var recent: Int?
 }
 
 struct GrantInfo: Codable, Identifiable, Hashable {

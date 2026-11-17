@@ -131,7 +131,10 @@ type Identity struct {
 	// http: variables set in Claude's sandbox so the CLI believes it is
 	// logged in (placeholders only; the proxy injects the real token).
 	SandboxEnv map[string]string `yaml:"sandboxEnv,omitempty"`
-	Note       string            `yaml:"note,omitempty"`
+	// http: path prefixes answered by the proxy itself (204, no token, no
+	// prompt), e.g. a CLI's telemetry endpoint.
+	BlockPaths []string `yaml:"blockPaths,omitempty"`
+	Note       string   `yaml:"note,omitempty"`
 }
 
 // Source is exactly one of the fields.
@@ -356,6 +359,8 @@ type Option struct {
 	Session bool
 	// Persist saves the approval (network hosts → proxy.allowedHosts).
 	Persist bool
+	// Label overrides the button text (once → "this command").
+	Label string
 }
 
 func ParseOption(s string, sessionMax time.Duration) (Option, error) {
@@ -379,6 +384,9 @@ func ParseOption(s string, sessionMax time.Duration) (Option, error) {
 }
 
 func (o Option) Display() string {
+	if o.Label != "" {
+		return o.Label
+	}
 	switch {
 	case o.Once:
 		return "Once"

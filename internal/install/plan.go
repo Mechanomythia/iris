@@ -194,6 +194,7 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 		try(add("hooks."+event, entry))
 	}
 	hook("PreToolUse", "Bash", "pre-tool-use")
+	hook("PostToolUse", "Bash", "post-tool-use")
 	hook("SessionStart", "", "session-start")
 	hook("SessionEnd", "", "session-end")
 

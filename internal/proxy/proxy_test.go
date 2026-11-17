@@ -38,7 +38,7 @@ func setup(t *testing.T, answer string) (*http.Client, *httptest.Server, *[]stri
 	cfg.Proxy.AllowedHosts = []string{"allowed.example"}
 	// "api.test" is mapped to the upstream by the dialer below.
 	cfg.Identities = []config.Identity{{Tool: "http", Target: "api.test", Source: config.Source{Static: "s3cret"},
-		RemoveHeaders: []string{"PRIVATE-TOKEN"}}}
+		RemoveHeaders: []string{"PRIVATE-TOKEN"}, BlockPaths: []string{"/api/v4/usage_data/"}}}
 	b := broker.New(cfg, "", audit.Open(filepath.Join(dir, "a.jsonl")))
 	b.Hub.Fallback = func(context.Context, approval.Request) (string, error) { return answer, nil }
 
@@ -129,5 +129,17 @@ func TestAllowlist(t *testing.T) {
 	_, err := client.Get("https://not-allowed.example/")
 	if err == nil || !strings.Contains(err.Error(), "Forbidden") {
 		t.Fatalf("expected proxy refusal, got %v", err)
+	}
+}
+
+func TestBlockPathsNeverPromptOrInject(t *testing.T) {
+	client, _, seen := setup(t, "deny") // a prompt would deny
+	resp, err := client.Post("https://api.test/api/v4/usage_data/track_event", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 204 || len(*seen) != 0 {
+		t.Fatalf("telemetry should be answered locally: %d, upstream saw %v", resp.StatusCode, *seen)
 	}
 }

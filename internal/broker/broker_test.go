@@ -234,12 +234,12 @@ func dialSub(path string) (*protocol.Conn, error) {
 
 func TestContextMatchesTool(t *testing.T) {
 	b := New(config.Default(), "", audit.Open(t.TempDir()+"/a"))
-	b.AddContext("kubectl get pods", "", "", "")
-	b.AddContext("ls -la", "", "", "")
-	if got := b.contextFor("kube", ""); got != "kubectl get pods" {
+	b.AddContext("kubectl get pods", "", "", "", "")
+	b.AddContext("ls -la", "", "", "", "")
+	if got, _ := b.contextFor("kube", ""); got != "kubectl get pods" {
 		t.Fatalf("kube: %q", got)
 	}
-	if got := b.contextFor("git", ""); got != "(latest Bash command) ls -la" {
+	if got, _ := b.contextFor("git", ""); got != "(latest Bash command) ls -la" {
 		t.Fatalf("git: %q", got)
 	}
 	if containsWord("digit", "git") || !containsWord("cd x && git push", "git") {
@@ -285,5 +285,49 @@ func TestPassthroughOnlyRunsAfterApproval(t *testing.T) {
 	last := audit.Open(e.auditP).Tail(1)
 	if !strings.Contains(string(last[0]), "your credentials") {
 		t.Fatalf("audit detail: %s", last[0])
+	}
+}
+
+func TestOnceCoversTheWholeCommand(t *testing.T) {
+	e := start(t)
+	e.answer.Store("once")
+	var labels []string
+	var recent []int
+	e.b.Hub.Fallback = func(_ context.Context, r approval.Request) (string, error) {
+		e.prompts.Add(1)
+		labels = append(labels, approval.Event(r).Options[0].Display)
+		recent = append(recent, r.Recent)
+		return e.answer.Load().(string), nil
+	}
+	// glab mr create: one command, three API calls.
+	e.b.AddContext("glab mr create --draft", "", "", "", "toolu_1")
+	for i := 0; i < 3; i++ {
+		if r := e.cred(t, "kube", "staging"); !r.OK {
+			t.Fatal(r.Error)
+		}
+	}
+	if n := e.prompts.Load(); n != 1 {
+		t.Fatalf("one command should prompt once, got %d", n)
+	}
+	if labels[0] != "this command" {
+		t.Fatalf("label %q", labels[0])
+	}
+	// Command finished: the grant is gone, the next command asks again.
+	e.b.EndContext("toolu_1")
+	e.b.AddContext("glab mr view 518", "", "", "", "toolu_2")
+	e.cred(t, "kube", "staging")
+	if n := e.prompts.Load(); n != 2 {
+		t.Fatalf("new command should prompt, got %d prompts", n)
+	}
+	if recent[1] != 1 {
+		t.Fatalf("second prompt should know about the first approval, got %v", recent)
+	}
+	// Without hook context, once is a single use again.
+	e.b.EndContext("toolu_2")
+	e.b.contexts = nil
+	e.cred(t, "kube", "staging")
+	e.cred(t, "kube", "staging")
+	if n := e.prompts.Load(); n != 4 {
+		t.Fatalf("no context: once per request, got %d prompts", n)
 	}
 }

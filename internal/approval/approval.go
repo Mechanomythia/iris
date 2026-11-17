@@ -22,6 +22,7 @@ type Request struct {
 	Identity config.Identity
 	Profile  string // Claude config dir label
 	Command  string // from PreToolUse hook, advisory only
+	Recent   int    // approvals of the same thing in the last 10 minutes
 	PID      int
 	Cwd      string
 	Argv     []string
@@ -164,7 +165,7 @@ func Event(r Request) protocol.Event {
 		Type: "approval_request", ID: r.ID,
 		Tool: r.Identity.Tool, Target: r.Identity.Target, Scope: r.Identity.Scope, Label: r.Identity.Label(), Profile: r.Profile, Passthrough: r.Identity.Source.Passthrough,
 		Command: r.Command, ProcessPID: r.PID, ProcessCwd: r.Cwd, ProcessArgv: r.Argv,
-		TouchID: r.TouchID, Deadline: r.Deadline,
+		TouchID: r.TouchID, Deadline: r.Deadline, Recent: r.Recent,
 	}
 	for _, o := range r.Options {
 		ev.Options = append(ev.Options, protocol.OptionInfo{Name: o.Name, Display: o.Display()})

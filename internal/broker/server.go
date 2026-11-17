@@ -130,7 +130,11 @@ func (s *Server) handleBroker(ctx context.Context, nc net.Conn) {
 		}
 		_ = c.Send(protocol.Response{OK: true, Credential: cred})
 	case "context":
-		s.B.AddContext(req.Command, req.Cwd, req.SessionID, req.Profile)
+		s.B.AddContext(req.Command, req.Cwd, req.SessionID, req.Profile, req.ToolUseID)
+		_ = c.Send(protocol.Response{OK: true})
+	case "context-end":
+		// Ending a command only narrows access (drops its grants).
+		s.B.EndContext(req.ToolUseID)
 		_ = c.Send(protocol.Response{OK: true})
 	case "revoke-session":
 		n := s.B.RevokeSession(req.Profile)
