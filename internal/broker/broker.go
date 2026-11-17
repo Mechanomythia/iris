@@ -229,6 +229,14 @@ func (b *Broker) ensureGrant(ctx context.Context, cfg *config.Config, id config.
 				return nil, ctx.Err()
 			}
 		}
+		// Re-check under the lock: a prompt that finished between our first
+		// check and here has already recorded its grant (ask adds the grant
+		// before the prompt entry is removed), so this closes the window
+		// that produced a second popup for the same request.
+		if g, ok := b.Grants.Use(id.Tool, id.Target, p.Profile); ok {
+			b.promptMu.Unlock()
+			return g, nil
+		}
 		pr := &prompt{done: make(chan struct{})}
 		b.prompts[pk] = pr
 		b.promptMu.Unlock()
