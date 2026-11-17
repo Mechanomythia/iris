@@ -229,4 +229,4 @@ make test
 IRIS_HOME=/tmp/ih iris daemon     # isolated home for experiments
 ```
 
-CI (`.github/workflows/build.yml`): Go vet and race tests on Linux, a darwin cross-compile, then on macOS darwin tests, a universal `Iris.app` (Swift + lipo'd Go), an ad-hoc signature, a CLI smoke test, and the zip uploaded as an artifact. Tags `v*` publish a GitHub release. Set `CODESIGN_IDENTITY` for Developer ID signing; notarization isn't wired up yet.
+CI (`.github/workflows/build.yml`): Go vet and race tests on Linux, a darwin cross-compile, then on macOS darwin tests, a universal `Iris.app` (Swift + lipo'd Go), an ad-hoc signature, a CLI smoke test, and the zip uploaded as an artifact. Tags `v*` publish a GitHub release. With the signing secrets set, CI signs with your Developer ID, notarizes and staples: see [docs/notarization.md](docs/notarization.md).

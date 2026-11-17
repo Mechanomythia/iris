@@ -28,6 +28,12 @@ jobs:
     name: macOS app
     runs-on: macos-15
     needs: go
+    env:
+      # Signing + notarization run only when these secrets exist; otherwise
+      # the app is ad-hoc signed as before. See docs/notarization.md.
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.1.0-{0}', github.run_number) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -35,16 +41,71 @@ jobs:
           go-version-file: go.mod
       - name: Go tests (darwin)
         run: go test ./...
-      - name: Build Iris.app
+
+      - name: Import Developer ID certificate
+        if: env.HAS_SIGNING == 'true'
         env:
-          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.1.0-{0}', github.run_number) }}
+          P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          test -n "$IDENTITY" || { echo "no 'Developer ID Application' identity in the .p12"; exit 1; }
+          echo "Signing as: $IDENTITY"
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build Iris.app
         run: |
           VERSION="${VERSION#v}" macos/Iris/build-app.sh
+
+      - name: Notarize and staple
+        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          V="${VERSION#v}"
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$NOTARY_KEY_P8" > "$KEY"
+          # Submit the zip, wait for Apple's verdict (usually 1-10 min).
+          xcrun notarytool submit "dist/Iris-$V.zip" \
+            --key "$KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | tee "$RUNNER_TEMP/notary.json"
+          STATUS=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$RUNNER_TEMP/notary.json")
+          if [ "$STATUS" != "Accepted" ]; then
+            ID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "$RUNNER_TEMP/notary.json")
+            xcrun notarytool log "$ID" --key "$KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+            exit 1
+          fi
+          # Staple the ticket to the app (a zip can't be stapled), then re-zip.
+          xcrun stapler staple dist/Iris.app
+          xcrun stapler validate dist/Iris.app
+          rm "dist/Iris-$V.zip"
+          (cd dist && ditto -c -k --keepParent Iris.app "Iris-$V.zip")
+          spctl --assess --type execute -vv dist/Iris.app
+          rm -f "$KEY"
+
       - name: Smoke test bundled CLI
         run: |
           dist/Iris.app/Contents/Resources/bin/iris version
           dist/Iris.app/Contents/Resources/bin/iris install --dry-run --no-launchd
           lipo -archs dist/Iris.app/Contents/MacOS/Iris
+          codesign -dv --verbose=2 dist/Iris.app 2>&1 | grep -E "Authority|TeamIdentifier|flags" || true
+
+      - name: Remove signing keychain
+        if: always() && env.HAS_SIGNING == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: Iris-macOS
