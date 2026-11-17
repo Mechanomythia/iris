@@ -18,20 +18,20 @@ func TestCloudWizardNoCreate(t *testing.T) {
 	t.Cleanup(func() { copyClip = old })
 
 	answers := strings.Join([]string{
-		"acme-api",     // name
-		"1,2,6,8",      // GitHub, GCP, AWS, APIs
-		"acme-prod",    // GCP project
-		"write",        // GCP access
-		"",             // roles default
-		"",             // AWS region default
-		"r",            // AWS access
-		"",             // policies default
-		"1,9",          // OpenAI + Other
-		"Internal",     // other name
-		"api.acme.dev", // host
-		"X-Api-Key",    // header
-		"",             // prefix -> default Bearer; then we test the empty-prefix path via Linear elsewhere
-		"y",            // walkthrough
+		"acme-api",                                 // name
+		"1,2,6,8",                                  // GitHub, GCP, AWS, APIs
+		"acme-prod",                                // GCP project
+		"write",                                    // GCP access
+		"",                                         // roles default
+		"",                                         // AWS region default
+		"r",                                        // AWS access
+		"",                                         // policies default
+		"1,9",                                      // OpenAI + Other
+		"Internal",                                 // other name
+		"api.acme.dev",                             // host
+		"X-Api-Key",                                // header
+		"",                                         // prefix -> default Bearer; then we test the empty-prefix path via Linear elsewhere
+		"y",                                        // walkthrough
 		"", "", "", "", "", "", "", "", "", "", "", // Enter presses
 	}, "\n") + "\n"
 	var out bytes.Buffer
