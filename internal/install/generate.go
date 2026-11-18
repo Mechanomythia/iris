@@ -273,6 +273,12 @@ func Generate(cfg *config.Config, o Options) ([]string, error) {
 
 	// git
 	sshOn := cfg.PassthroughEnabled(config.ToolSSH)
+	if cfg.Uses(config.ToolGit) || sshOn {
+		// allowWrite only covers paths that exist (Linux), so create it.
+		if err := os.MkdirAll(paths.ClaudeGHDir(), 0o700); err != nil {
+			return written, err
+		}
+	}
 	if SSHCommand(cfg, o.HelperBin) != "" {
 		// known_hosts isn't secret; ~/.ssh is hidden from the sandbox, so give
 		// Claude's ssh a copy to verify hosts against.

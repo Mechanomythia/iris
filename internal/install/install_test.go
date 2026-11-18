@@ -360,3 +360,39 @@ func TestPlaceholderEnvNotDenied(t *testing.T) {
 		t.Fatal("other secrets must still be denied")
 	}
 }
+
+// Claude Code applies Edit deny rules to sandbox writes, overriding
+// allowWrite: no writable path may sit under a protected one.
+func TestAllowWriteNotUnderEditDeny(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("IRIS_HOME", home)
+	var d Doc
+	_ = json.Unmarshal([]byte(`{}`), &d)
+	cfg := testCfg()
+	cfg.Passthrough.Tools = []string{"ssh"}
+	if err := Plan(&Editor{D: d, M: &Manifest{}}, cfg, Options{IrisBin: "/i", HelperBin: "/h"}); err != nil {
+		t.Fatal(err)
+	}
+	sb := d["sandbox"].(map[string]any)["filesystem"].(map[string]any)["allowWrite"].([]any)
+	deny := d["permissions"].(map[string]any)["deny"].([]any)
+	if len(sb) < 2 {
+		t.Fatalf("allowWrite: %v", sb)
+	}
+	for _, w := range sb {
+		ws := w.(string)
+		for _, r := range deny {
+			rs := r.(string)
+			if !strings.HasPrefix(rs, "Edit(") {
+				continue
+			}
+			pat := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(rs, "Edit("), ")"), "**")
+			pat = strings.TrimSuffix(pat, "/")
+			if strings.HasPrefix(pat, "~/") {
+				pat = home + pat[1:]
+			}
+			if strings.HasPrefix(ws, pat+"/") || ws == pat {
+				t.Errorf("allowWrite %s is under %s, so the sandbox can't write it", ws, rs)
+			}
+		}
+	}
+}

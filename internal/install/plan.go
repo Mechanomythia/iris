@@ -135,7 +135,8 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	if cfg.Uses(config.ToolGit) || sshOn {
 		env["GIT_CONFIG_GLOBAL"] = paths.ClaudeGitconfig()
 		env["GIT_TERMINAL_PROMPT"] = "0"
-		env["GH_CONFIG_DIR"] = paths.ClaudeDir() + "/gh"
+		env["GH_CONFIG_DIR"] = paths.ClaudeGHDir()
+		try(add("sandbox.filesystem.allowWrite", paths.ClaudeGHDir())) // gh writes its config and state here
 	}
 	if sshOn {
 		// The sandbox talks to the iris agent, never to 1Password's socket.

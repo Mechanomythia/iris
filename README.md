@@ -314,3 +314,6 @@ IRIS_HOME=/tmp/ih iris daemon     # isolated home for experiments
 ```
 
 CI (`.github/workflows/build.yml`): Go vet and race tests on Linux, a darwin cross-compile, then on macOS darwin tests, a universal `Iris.app` (Swift + lipo'd Go), an ad-hoc signature, a CLI smoke test, and the zip uploaded as an artifact. Tags `v*` publish a GitHub release. With the signing secrets set, CI signs with your Developer ID, notarizes and staples: see [docs/notarization.md](docs/notarization.md).
+
+> **Writable Claude-only config** (gcloud's `CLOUDSDK_CONFIG`, gh's `GH_CONFIG_DIR`) lives in `~/.local/share/iris-sandbox`, outside `~/.local/share/iris`. Iris denies Claude edits to its own files, and Claude Code applies Edit deny rules to sandbox writes too, overriding `allowWrite`.
+

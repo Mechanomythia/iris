@@ -69,11 +69,19 @@ func ShareDir() string         { return filepath.Join(home(), ".local", "share",
 func ClaudeDir() string        { return filepath.Join(ShareDir(), "claude") }
 func ClaudeKubeconfig() string { return filepath.Join(ClaudeDir(), "kubeconfig") }
 func ClaudeAWSConfig() string  { return filepath.Join(ClaudeDir(), "aws", "config") }
-func ClaudeGcloudDir() string  { return filepath.Join(ClaudeDir(), "gcloud") }
-func ClaudeGitconfig() string  { return filepath.Join(ClaudeDir(), "gitconfig") }
-func ClaudeDockerDir() string  { return filepath.Join(ClaudeDir(), "docker") }
-func ClaudeCABundle() string   { return filepath.Join(ClaudeDir(), "ca-bundle.pem") }
-func ShimDir() string          { return filepath.Join(ClaudeDir(), "bin") }
+
+// SandboxDir holds Claude-only config that tools inside the sandbox must be
+// able to write (gcloud, gh). It is outside ShareDir on purpose: iris denies
+// Claude edits to ShareDir, and Claude Code applies Edit deny rules to
+// sandbox writes too, overriding allowWrite.
+func SandboxDir() string { return filepath.Join(home(), ".local", "share", "iris-sandbox") }
+
+func ClaudeGcloudDir() string { return filepath.Join(SandboxDir(), "gcloud") }
+func ClaudeGHDir() string     { return filepath.Join(SandboxDir(), "gh") }
+func ClaudeGitconfig() string { return filepath.Join(ClaudeDir(), "gitconfig") }
+func ClaudeDockerDir() string { return filepath.Join(ClaudeDir(), "docker") }
+func ClaudeCABundle() string  { return filepath.Join(ClaudeDir(), "ca-bundle.pem") }
+func ShimDir() string         { return filepath.Join(ClaudeDir(), "bin") }
 
 // DefaultClaudeDir is where Claude Code keeps its config when no alias
 // overrides it.
