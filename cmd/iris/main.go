@@ -579,6 +579,12 @@ func sessionNote(cfg *config.Config) string {
 		fmt.Fprintf(&b, "- These variables hold iris placeholders, not real tokens: %s. The iris proxy swaps in the real token after approval. "+
 			"Never unset or override them (no `env -u`, no `unset`), and don't try another login inside the sandbox: that bypasses iris and fails.\n", strings.Join(ph, ", "))
 	}
+	if cfg.PassthroughEnabled(config.ToolSSH) || (cfg.Proxy.Enabled && cfg.Proxy.SocksListen != "") {
+		b.WriteString("- ssh and git over SSH work through iris (GIT_SSH_COMMAND); SSH is not blocked. If they fail, read the error: " +
+			"`Permission denied (publickey)` means the user declined or missed the iris prompt for their key (ask them, then retry once); " +
+			"`Host key verification failed` means the host is not in the user's known_hosts (ask them to run `ssh -T git@<host>` once in their terminal); " +
+			"a line starting with `iris:` says exactly what to do. Don't replace GIT_SSH_COMMAND or build your own known_hosts.\n")
+	}
 	b.WriteString("- If a request is denied, the user declined it: don't retry with workarounds. " +
 		"If a service rejects a token (401) or a credential can't be read, tell the user and suggest `iris status` / `iris audit` in their own terminal; " +
 		"don't look for other credentials.\n")

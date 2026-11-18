@@ -11,8 +11,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mechanomythia/iris/internal/audit"
+	"github.com/mechanomythia/iris/internal/config"
+	"github.com/mechanomythia/iris/internal/paths"
 	"github.com/mechanomythia/iris/internal/peer"
 	"github.com/mechanomythia/iris/internal/protocol"
+	"github.com/mechanomythia/iris/internal/sshhosts"
 )
 
 // Server owns the two sockets.
@@ -136,6 +140,18 @@ func (s *Server) handleBroker(ctx context.Context, nc net.Conn) {
 		// Ending a command only narrows access (drops its grants).
 		s.B.EndContext(req.ToolUseID)
 		_ = c.Send(protocol.Response{OK: true})
+	case "ssh-host":
+		// Read-only for the sandbox: it can only make iris re-copy keys you
+		// already trust from your own known_hosts.
+		st, err := sshhosts.Ensure(filepath.Join(paths.Home(), ".ssh", "known_hosts"), paths.ClaudeKnownHosts(), req.Host, req.Port)
+		if st != sshhosts.Known {
+			detail := "known_hosts: " + st
+			if err != nil {
+				detail += " (" + err.Error() + ")"
+			}
+			s.B.Audit.Write(audit.Entry{Event: "ssh-host", Tool: config.ToolSSH, Target: net.JoinHostPort(req.Host, req.Port), Profile: req.Profile, Detail: detail})
+		}
+		_ = c.Send(protocol.Response{OK: true, Detail: st})
 	case "revoke-session":
 		n := s.B.RevokeSession(req.Profile)
 		_ = c.Send(protocol.Response{OK: true, Revoked: n})

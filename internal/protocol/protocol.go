@@ -36,6 +36,10 @@ type Request struct {
 	SessionID string `json:"sessionId,omitempty"`
 	ToolUseID string `json:"toolUseId,omitempty"` // context / context-end
 
+	// ssh-host (SSH ProxyCommand, before connecting)
+	Host string `json:"host,omitempty"`
+	Port string `json:"port,omitempty"`
+
 	// control
 	ID     string `json:"id,omitempty"`     // revoke / decision
 	All    bool   `json:"all,omitempty"`    // revoke
@@ -52,6 +56,7 @@ type Response struct {
 	Status     *Status           `json:"status,omitempty"`
 	Audit      []json.RawMessage `json:"audit,omitempty"`
 	Revoked    int               `json:"revoked,omitempty"`
+	Detail     string            `json:"detail,omitempty"` // ssh-host: known | synced | unknown
 }
 
 // Credential is what the helper turns into tool-specific output.

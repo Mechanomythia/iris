@@ -281,11 +281,26 @@ func connect(args []string) error {
 		return err
 	}
 	defer c.Close()
+	// Make sure Claude's copy of known_hosts knows this host (iris re-copies
+	// yours), or say why ssh is about to refuse it. Best effort.
+	if resp, err := protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "ssh-host", Host: args[0], Port: args[1],
+		Profile: os.Getenv("IRIS_PROFILE")}, 5*time.Second); err == nil && resp.Detail == "unknown" {
+		fmt.Fprintf(os.Stderr, "iris: %s is not in the user's ~/.ssh/known_hosts, so ssh can't verify its host key "+
+			"(\"Host key verification failed\"). This is not a network block. Ask the user to run `ssh -T git@%s` once "+
+			"in their own terminal and accept the key; then retry, no restart needed.\n", args[0], sshTarget(args[0], args[1]))
+	}
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(c, os.Stdin); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(os.Stdout, c); done <- struct{}{} }()
 	<-done
 	return nil
+}
+
+func sshTarget(host, port string) string {
+	if port == "" || port == "22" {
+		return host
+	}
+	return host + " -p " + port
 }
 
 // ---- git credential helper protocol ----

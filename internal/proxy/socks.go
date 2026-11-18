@@ -9,6 +9,9 @@ import (
 	"net"
 	"strconv"
 	"time"
+
+	"github.com/mechanomythia/iris/internal/audit"
+	"github.com/mechanomythia/iris/internal/config"
 )
 
 // ServeSOCKS serves SOCKS5 (RFC 1928, no auth, CONNECT only) for non-HTTP
@@ -50,15 +53,22 @@ func (p *Proxy) handleSOCKS(ctx context.Context, c net.Conn) {
 	// The dialog may take a while: no deadline while deciding.
 	_ = c.SetDeadline(time.Time{})
 	reply := func(code byte) { _, _ = c.Write([]byte{5, code, 0, 1, 0, 0, 0, 0, 0, 0}) }
-	if err := p.decide(ctx, host, port, "connect "+net.JoinHostPort(host, port)); err != nil {
+	target := net.JoinHostPort(host, port)
+	logc := func(detail string) {
+		p.B.Audit.Write(audit.Entry{Event: "connect", Tool: config.ToolNetwork, Target: target, Detail: detail})
+	}
+	if err := p.decide(ctx, host, port, "connect "+target); err != nil {
+		logc("blocked: " + err.Error())
 		reply(socksNotAllowed)
 		return
 	}
-	up, err := p.DialUpstream(ctx, "tcp", net.JoinHostPort(host, port))
+	up, err := p.DialUpstream(ctx, "tcp", target)
 	if err != nil {
+		logc("unreachable: " + err.Error())
 		reply(socksHostUnreach)
 		return
 	}
+	logc("connected")
 	defer up.Close()
 	reply(socksOK)
 	done := make(chan struct{}, 2)
