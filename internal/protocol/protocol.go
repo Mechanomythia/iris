@@ -97,21 +97,28 @@ type Status struct {
 type Event struct {
 	Type string `json:"type"` // approval_request | cancel | grants_changed
 
-	ID          string       `json:"id,omitempty"`
-	Tool        string       `json:"tool,omitempty"`
-	Target      string       `json:"target,omitempty"`
-	Scope       string       `json:"scope,omitempty"`
-	Label       string       `json:"label,omitempty"`
-	Passthrough bool         `json:"passthrough,omitempty"` // uses the user's own credentials
-	Profile     string       `json:"profile,omitempty"`
-	Command     string       `json:"command,omitempty"`
-	ProcessPID  int          `json:"pid,omitempty"`
-	ProcessCwd  string       `json:"cwd,omitempty"`
-	ProcessArgv []string     `json:"argv,omitempty"`
-	Options     []OptionInfo `json:"options,omitempty"`
-	TouchID     bool         `json:"touchID,omitempty"`
-	Deadline    time.Time    `json:"deadline,omitempty"`
-	Recent      int          `json:"recent,omitempty"` // approved this N times in the last 10 min
+	ID          string `json:"id,omitempty"`
+	Tool        string `json:"tool,omitempty"`
+	Target      string `json:"target,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	Label       string `json:"label,omitempty"`
+	Passthrough bool   `json:"passthrough,omitempty"` // uses the user's own credentials
+	Profile     string `json:"profile,omitempty"`
+	Command     string `json:"command,omitempty"`
+	// CommandSpans: Command highlighted and line-broken for display.
+	CommandSpans []CommandSpan `json:"commandSpans,omitempty"`
+	ProcessPID   int           `json:"pid,omitempty"`
+	ProcessCwd   string        `json:"cwd,omitempty"`
+	ProcessArgv  []string      `json:"argv,omitempty"`
+	Options      []OptionInfo  `json:"options,omitempty"`
+	TouchID      bool          `json:"touchID,omitempty"`
+	Deadline     time.Time     `json:"deadline,omitempty"`
+	Recent       int           `json:"recent,omitempty"` // approved this N times in the last 10 min
+}
+
+type CommandSpan struct {
+	Text string `json:"text"`
+	Kind string `json:"kind"`
 }
 
 type OptionInfo struct {

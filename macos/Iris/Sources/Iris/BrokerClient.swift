@@ -7,6 +7,11 @@ struct OptionInfo: Codable, Hashable {
     let display: String
 }
 
+struct CommandSpan: Codable, Hashable {
+    let text: String
+    let kind: String
+}
+
 struct BrokerEvent: Codable {
     let type: String
     var id: String?
@@ -17,6 +22,7 @@ struct BrokerEvent: Codable {
     var profile: String?
     var passthrough: Bool?
     var command: String?
+    var commandSpans: [CommandSpan]?
     var pid: Int?
     var cwd: String?
     var argv: [String]?

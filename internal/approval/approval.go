@@ -15,6 +15,7 @@ import (
 
 	"github.com/mechanomythia/iris/internal/config"
 	"github.com/mechanomythia/iris/internal/protocol"
+	"github.com/mechanomythia/iris/internal/shellfmt"
 )
 
 type Request struct {
@@ -167,6 +168,9 @@ func Event(r Request) protocol.Event {
 		Command: r.Command, ProcessPID: r.PID, ProcessCwd: r.Cwd, ProcessArgv: r.Argv,
 		TouchID: r.TouchID, Deadline: r.Deadline, Recent: r.Recent,
 	}
+	for _, sp := range shellfmt.Highlight(r.Command) {
+		ev.CommandSpans = append(ev.CommandSpans, protocol.CommandSpan{Text: sp.Text, Kind: sp.Kind})
+	}
 	for _, o := range r.Options {
 		ev.Options = append(ev.Options, protocol.OptionInfo{Name: o.Name, Display: o.Display()})
 	}
@@ -182,7 +186,7 @@ func Message(r Request) string {
 	}
 	fmt.Fprintf(&b, "%s wants to use: %s\n", who, r.Identity.Label())
 	if r.Command != "" {
-		fmt.Fprintf(&b, "\nCommand:\n%s\n", truncate(r.Command, 300))
+		fmt.Fprintf(&b, "\nCommand:\n%s\n", truncate(shellfmt.Plain(r.Command), 600))
 	}
 	if len(r.Argv) > 0 {
 		fmt.Fprintf(&b, "\nProcess: %s", truncate(strings.Join(r.Argv, " "), 200))

@@ -165,7 +165,7 @@ struct ApprovalView: View {
             Neatline()
             footer
         }
-        .frame(width: 580)
+        .frame(width: 640)
         .background(Hy.skyRaised)
         .clipShape(RoundedRectangle(cornerRadius: Hy.r2))
         .overlay(RoundedRectangle(cornerRadius: Hy.r2).strokeBorder(Hy.neatline, lineWidth: 1))
@@ -243,19 +243,7 @@ struct ApprovalView: View {
     private var legend: some View {
         VStack(alignment: .leading, spacing: Hy.s3) {
             if let cmd = event.command, !cmd.isEmpty {
-                row("Command") {
-                    HStack(alignment: .top, spacing: Hy.s2) {
-                        Text("$").foregroundStyle(Hy.faint)
-                        Text(cmd).foregroundStyle(Hy.starlight).textSelection(.enabled)
-                    }
-                    .font(Hy.mono(12.5))
-                    .lineLimit(4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Hy.s3)
-                    .padding(.vertical, Hy.s2)
-                    .background(RoundedRectangle(cornerRadius: Hy.r2).fill(Hy.sky))
-                    .overlay(RoundedRectangle(cornerRadius: Hy.r2).strokeBorder(Hy.neatline, lineWidth: 1))
-                }
+                row("Command") { CommandBox(command: cmd, spans: event.commandSpans) }
             }
             if let argv = event.argv, !argv.isEmpty {
                 row("Process") { mono(argv.joined(separator: " ")) }
@@ -376,5 +364,99 @@ enum OutputWindow {
         windows.append(w)
         NSApp.activate(ignoringOtherApps: true)
         w.makeKeyAndOrderFront(nil)
+    }
+}
+
+// MARK: - Command box
+
+/// The command, highlighted and broken into lines by the broker
+/// (internal/shellfmt). Grows up to `maxLines`, then scrolls.
+struct CommandBox: View {
+    let command: String
+    let spans: [CommandSpan]?
+
+    static let maxLines = 12
+    static let fontSize: CGFloat = 12.5
+    static let lineHeight: CGFloat = 18
+    static let charsPerLine = 58
+
+    /// "(latest Bash command)": iris matched the request to Claude's most
+    /// recent command itself, so it says so under the box.
+    private var isGuess: Bool { spans?.first?.kind == "note" }
+
+    private var bodySpans: [CommandSpan] {
+        guard var s = spans, !s.isEmpty else { return [CommandSpan(text: command, kind: "arg")] }
+        if s.first?.kind == "note" {
+            s.removeFirst()
+            if s.first?.kind == "break" { s.removeFirst() }
+        }
+        return s
+    }
+
+    private var plain: String { bodySpans.map(\.text).joined() }
+
+    private var estimatedLines: Int {
+        plain.split(separator: "\n", omittingEmptySubsequences: false)
+            .reduce(0) { $0 + max(1, ($1.count + Self.charsPerLine - 1) / Self.charsPerLine) }
+    }
+
+    private var attributed: AttributedString {
+        var out = AttributedString()
+        for s in bodySpans {
+            var a = AttributedString(s.text)
+            let (color, weight) = Self.style(s.kind)
+            a.foregroundColor = color
+            a.font = Hy.mono(Self.fontSize, weight)
+            out += a
+        }
+        return out
+    }
+
+    static func style(_ kind: String) -> (Color, CGFloat) {
+        switch kind {
+        case "cmd": return (Hy.starlight, 650)
+        case "flag": return (Hy.classA, 400)
+        case "string": return (Hy.classG, 400)
+        case "var": return (Hy.classK, 400)
+        case "keyword": return (Hy.classM, 600)
+        case "op": return (Hy.neatlineStrong, 700)
+        case "redir", "comment": return (Hy.faint, 400)
+        default: return (Hy.dust, 400)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Hy.s1) {
+            box
+            if isGuess {
+                Text("Iris's guess: Claude's most recent command (Claude didn't report one for this request).")
+                    .font(Hy.ui(11))
+                    .foregroundStyle(Hy.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var text: some View {
+        Text(attributed)
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Hy.s3)
+            .padding(.vertical, Hy.s2)
+    }
+
+    @ViewBuilder private var box: some View {
+        Group {
+            if estimatedLines > Self.maxLines {
+                ScrollView(.vertical, showsIndicators: true) { text }
+                    .frame(height: CGFloat(Self.maxLines) * Self.lineHeight + 2 * Hy.s2)
+            } else {
+                text
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: Hy.r2).fill(Hy.sky))
+        .overlay(RoundedRectangle(cornerRadius: Hy.r2).strokeBorder(Hy.neatline, lineWidth: 1))
     }
 }
