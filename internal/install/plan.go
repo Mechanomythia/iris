@@ -208,19 +208,29 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 // config and use the copied known_hosts; use the iris agent (ssh
 // passthrough) and the iris SOCKS proxy (network gate) when on.
 func SSHCommand(cfg *config.Config, helper string) string {
+	opts := SSHOptions(cfg, helper)
+	if len(opts) == 0 {
+		return ""
+	}
+	return "ssh " + strings.Join(opts, " ")
+}
+
+// SSHOptions are the shell-quoted options iris puts in front of every ssh
+// Claude runs (GIT_SSH_COMMAND and the ssh shim on Claude's PATH).
+func SSHOptions(cfg *config.Config, helper string) []string {
 	sshOn := cfg.PassthroughEnabled(config.ToolSSH)
 	socks := cfg.Proxy.Enabled && cfg.Proxy.SocksListen != ""
 	if !sshOn && !socks {
-		return ""
+		return nil
 	}
-	parts := []string{"ssh", "-F", "/dev/null", "-o", "UserKnownHostsFile=" + paths.ClaudeKnownHosts(), "-o", "StrictHostKeyChecking=yes"}
+	parts := []string{"-F", "/dev/null", "-o", "UserKnownHostsFile=" + paths.ClaudeKnownHosts(), "-o", "StrictHostKeyChecking=yes"}
 	if sshOn {
 		parts = append(parts, "-o", "IdentityAgent="+paths.SSHAgentSocket())
 	}
 	if socks {
 		parts = append(parts, "-o", shellQuote("ProxyCommand="+helper+" connect %h %p"))
 	}
-	return strings.Join(parts, " ")
+	return parts
 }
 
 func readRule(f string) string {
