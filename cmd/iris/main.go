@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -413,6 +414,9 @@ func cmdStatus() error {
 		ui = "connected"
 	}
 	fmt.Println("Iris.app:", ui)
+	for _, w := range s.Warnings {
+		fmt.Println("warning:", w)
+	}
 	if s.ProxyListen != "" {
 		fmt.Println("proxy:", s.ProxyListen)
 	}
@@ -525,6 +529,13 @@ func cmdHook(args []string) error {
 			_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "context-end", ToolUseID: in.ToolUseID, Profile: *profile}, 2*time.Second)
 		}
 	case "session-start":
+		if cfg, err := config.Load(""); err == nil {
+			if note := sessionNote(cfg); note != "" {
+				out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+					"hookEventName": "SessionStart", "additionalContext": note}})
+				fmt.Println(string(out))
+			}
+		}
 		if f := os.Getenv("CLAUDE_ENV_FILE"); f != "" {
 			var sb strings.Builder
 			fmt.Fprintf(&sb, "export PATH=%q:\"$PATH\"\n", paths.ShimDir())
@@ -544,6 +555,34 @@ func cmdHook(args []string) error {
 		return fmt.Errorf("unknown hook %q", event)
 	}
 	return nil
+}
+
+// sessionNote tells Claude how iris works, so it doesn't "fix" the setup by
+// unsetting placeholders or hunting for tokens the sandbox hides on purpose.
+func sessionNote(cfg *config.Config) string {
+	var ph []string
+	for _, id := range cfg.ByTool(config.ToolHTTP) {
+		for k, v := range id.SandboxEnv {
+			if strings.HasPrefix(v, "iris-") {
+				ph = append(ph, fmt.Sprintf("%s (%s)", k, id.Target))
+			}
+		}
+	}
+	if len(cfg.Identities) == 0 && len(cfg.Passthrough.Tools) == 0 && len(ph) == 0 {
+		return ""
+	}
+	sort.Strings(ph)
+	var b strings.Builder
+	b.WriteString("Credentials in this session are brokered by iris. The user approves each use in a popup on their Mac; " +
+		"tokens never enter the sandbox, and the Keychain and credential files are blocked on purpose.\n")
+	if len(ph) > 0 {
+		fmt.Fprintf(&b, "- These variables hold iris placeholders, not real tokens: %s. The iris proxy swaps in the real token after approval. "+
+			"Never unset or override them (no `env -u`, no `unset`), and don't try another login inside the sandbox: that bypasses iris and fails.\n", strings.Join(ph, ", "))
+	}
+	b.WriteString("- If a request is denied, the user declined it: don't retry with workarounds. " +
+		"If a service rejects a token (401) or a credential can't be read, tell the user and suggest `iris status` / `iris audit` in their own terminal; " +
+		"don't look for other credentials.\n")
+	return b.String()
 }
 
 // ---------------- provision ----------------

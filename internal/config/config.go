@@ -134,7 +134,13 @@ type Identity struct {
 	// http: path prefixes answered by the proxy itself (204, no token, no
 	// prompt), e.g. a CLI's telemetry endpoint.
 	BlockPaths []string `yaml:"blockPaths,omitempty"`
-	Note       string   `yaml:"note,omitempty"`
+	// http: run on your Mac only when the upstream rejects the injected
+	// token (401), e.g. to make glab refresh an expired OAuth token. The
+	// request is then retried once with the fresh token.
+	Refresh []string `yaml:"refresh,omitempty"`
+	// http: what to do when the upstream keeps rejecting the token (menu).
+	RejectHint string `yaml:"rejectHint,omitempty"`
+	Note       string `yaml:"note,omitempty"`
 }
 
 // Source is exactly one of the fields.
@@ -192,6 +198,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, c); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	c.fillDefaults()
 	return c, c.Validate()
 }
 
@@ -439,4 +446,44 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// fillDefaults upgrades identities written by older versions, so an update
+// works without re-running the provisioner.
+func (c *Config) fillDefaults() {
+	for n := range c.Identities {
+		id := &c.Identities[n]
+		if host, ok := GlabTokenHost(id.Source.Command); ok {
+			if len(id.Refresh) == 0 {
+				id.Refresh = GlabRefresh(host)
+			}
+			if id.RejectHint == "" {
+				id.RejectHint = GlabRejectHint(host)
+			}
+		}
+	}
+}
+
+// GlabTokenHost reports whether cmd is `glab config get token --host H`.
+func GlabTokenHost(cmd []string) (string, bool) {
+	if len(cmd) < 4 || cmd[0] != "glab" || cmd[1] != "config" || cmd[2] != "get" || cmd[3] != "token" {
+		return "", false
+	}
+	host := "gitlab.com"
+	for i := 4; i+1 < len(cmd); i++ {
+		if cmd[i] == "--host" || cmd[i] == "-h" {
+			host = cmd[i+1]
+		}
+	}
+	return host, true
+}
+
+// GlabRefresh makes glab call the API once on your Mac; glab refreshes an
+// expired OAuth token before it does.
+func GlabRefresh(host string) []string {
+	return []string{"glab", "api", "--hostname", host, "user"}
+}
+
+func GlabRejectHint(host string) string {
+	return "run `glab auth login --hostname " + host + "` in your own terminal"
 }

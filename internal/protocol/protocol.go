@@ -85,6 +85,7 @@ type Status struct {
 	Identities    []string  `json:"identities"`
 	ProxyListen   string    `json:"proxyListen,omitempty"`
 	PendingPrompt int       `json:"pendingPrompts"`
+	Warnings      []string  `json:"warnings,omitempty"`
 }
 
 // Event is pushed from the daemon to subscribed UIs on control.sock.

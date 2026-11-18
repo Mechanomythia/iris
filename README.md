@@ -167,6 +167,8 @@ iris restart
 ```
 
 - Inside the sandbox, `glab` gets a placeholder `GITLAB_TOKEN`, so it thinks it's logged in. When it calls the GitLab API, iris swaps the placeholder `PRIVATE-TOKEN` header for `Authorization: Bearer <your token>`. Iris reads that token on your Mac with `glab config get token`, after you approve (or from the Keychain with `--paste`).
+- **Expired tokens.** A `glab auth login --web` token is OAuth and expires after about 2 hours, and `glab config get token` doesn't refresh it. Iris doesn't check the token on every read. When GitLab answers **401**, iris runs `glab api user` on your Mac once (glab refreshes its login first), then replays the request with the fresh token. Request bodies up to 4 MiB are replayed, so a `glab mr create` survives too. Refreshes run at most once per 30 seconds. If the token still gets rejected, the menu and `iris status` show "gitlab.com rejected your token: run `glab auth login --hostname gitlab.com`". Any `http` identity can set `refresh:` (a command) and `rejectHint:`.
+- **Claude is told.** At session start, iris tells Claude that `GITLAB_TOKEN` is a placeholder it must not unset, and that a 401 is for you to fix, not for it to work around.
 - For that, iris terminates HTTPS for those hosts with its own CA. Go tools on macOS only trust your Keychain, hence `iris ca trust`. The CA is **name-constrained** to the injected hosts (`gitlab.com` here): even trusted, and even if its key leaked, it can't vouch for any other site. Adding or removing injected hosts regenerates it; `iris install` then tells you to trust it again.
 - The same mechanism works for any API (`iris provision secret --tool http …`); `removeHeaders` and `sandboxEnv` on an `http` identity cover other CLIs' placeholders.
 

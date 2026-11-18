@@ -45,6 +45,7 @@ struct StatusInfo: Codable {
     let identities: [String]?
     let proxyListen: String?
     let pendingPrompts: Int
+    var warnings: [String]?
 }
 
 struct AuditEntry: Codable, Hashable {

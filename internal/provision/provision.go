@@ -499,6 +499,7 @@ func GitLab(ctx context.Context, r *Runner, o GitLabOptions) (config.Identity, e
 	}
 	if o.Paste {
 		id.Source = config.Source{Keychain: &config.Keychain{Service: "iris", Account: "http/" + o.Host}}
+		id.RejectHint = "your stored token was rejected: run `iris provision gitlab --paste` with a fresh one"
 		if r.DryRun {
 			fmt.Fprintf(r.Out, "  (dry-run) would store the pasted token in Keychain service=iris account=http/%s\n", o.Host)
 			return id, nil
@@ -510,6 +511,8 @@ func GitLab(ctx context.Context, r *Runner, o GitLabOptions) (config.Identity, e
 		return id, secrets.StoreKeychain(ctx, "iris", "http/"+o.Host, tok)
 	}
 	id.Source = config.Source{Command: []string{"glab", "config", "get", "token", "--host", o.Host}}
+	id.Refresh = config.GlabRefresh(o.Host)
+	id.RejectHint = config.GlabRejectHint(o.Host)
 	if r.DryRun {
 		fmt.Fprintf(r.Out, "  (dry-run) would read your token with: glab config get token --host %s\n", o.Host)
 		return id, nil

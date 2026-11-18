@@ -36,6 +36,7 @@ struct MenuContent: View {
         VStack(alignment: .leading, spacing: Hy.s4) {
             header
             versionMismatch
+            upstreamWarnings
             grantsPlate
             recentPlate
             actions
@@ -84,6 +85,23 @@ struct MenuContent: View {
                 Spacer()
                 Button("Update broker") { state.runCLI(["install"], title: "iris install") }
                     .buttonStyle(HyButton(kind: .secondary, small: true))
+            }
+            .padding(.horizontal, Hy.s3)
+            .padding(.vertical, Hy.s2)
+            .background(RoundedRectangle(cornerRadius: Hy.r1).fill(Hy.tintK))
+        }
+    }
+
+    /// An upstream keeps rejecting an injected token (e.g. an expired glab login).
+    @ViewBuilder private var upstreamWarnings: some View {
+        ForEach(state.status?.warnings ?? [], id: \.self) { w in
+            HStack(alignment: .top, spacing: Hy.s2) {
+                StarGlyph(state: .degraded, size: 12)
+                Text(w)
+                    .font(Hy.ui(12))
+                    .foregroundStyle(Hy.classK)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, Hy.s3)
             .padding(.vertical, Hy.s2)

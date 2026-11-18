@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,9 +46,20 @@ type Broker struct {
 	ctxMu    sync.Mutex
 	contexts []hookContext
 
+	rejMu     sync.Mutex
+	rejected  map[string]rejection // identity key → last upstream rejection
+	refreshed map[string]time.Time // identity key → last refresh run
+
 	ProxyListen string
 	// OnPersist saves an "Always" approval (network: host → allowedHosts).
 	OnPersist func(id config.Identity)
+}
+
+type rejection struct {
+	at     time.Time
+	status int
+	hint   string
+	target string
 }
 
 type prompt struct {
@@ -408,6 +420,84 @@ func (b *Broker) mint(ctx context.Context, id config.Identity) (*protocol.Creden
 	return c, nil
 }
 
+// RefreshAfterReject handles an upstream 401 for an injected token: it drops
+// the cached token and, if the identity has a refresh command, runs it on the
+// host (at most once per refreshEvery per identity, so a dead token cannot
+// loop). It reports whether a retry may get a different token.
+func (b *Broker) RefreshAfterReject(ctx context.Context, id config.Identity) bool {
+	b.cacheMu.Lock()
+	delete(b.cache, id.Key())
+	b.cacheMu.Unlock()
+	if len(id.Refresh) == 0 {
+		return false
+	}
+	b.rejMu.Lock()
+	if b.refreshed == nil {
+		b.refreshed = map[string]time.Time{}
+	}
+	if last, ok := b.refreshed[id.Key()]; ok && b.now().Sub(last) < refreshEvery {
+		b.rejMu.Unlock()
+		return false
+	}
+	b.refreshed[id.Key()] = b.now()
+	b.rejMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := secrets.Fetch(ctx, config.Source{Command: id.Refresh}); err != nil {
+		b.Audit.Write(audit.Entry{Event: "error", Tool: id.Tool, Target: id.Target, Detail: "refresh after 401 failed: " + err.Error()})
+		return false
+	}
+	b.Audit.Write(audit.Entry{Event: "refresh", Tool: id.Tool, Target: id.Target, Detail: "upstream said 401; ran " + strings.Join(id.Refresh, " ")})
+	return true
+}
+
+const refreshEvery = 30 * time.Second
+
+// NoteUpstream records how the upstream answered a request carrying an
+// injected token: 401/403 shows a warning in the menu until a request
+// succeeds again.
+func (b *Broker) NoteUpstream(id config.Identity, status int, method, path string) {
+	b.rejMu.Lock()
+	defer b.rejMu.Unlock()
+	if b.rejected == nil {
+		b.rejected = map[string]rejection{}
+	}
+	switch {
+	case status == 401 || status == 403:
+		_, had := b.rejected[id.Key()]
+		b.rejected[id.Key()] = rejection{at: b.now(), status: status, hint: id.RejectHint, target: id.Target}
+		if !had || status == 401 {
+			b.Audit.Write(audit.Entry{Event: "upstream-rejected", Tool: id.Tool, Target: id.Target,
+				Detail: fmt.Sprintf("%d for %s %s", status, method, path)})
+		}
+	case status >= 200 && status < 400:
+		delete(b.rejected, id.Key())
+	}
+}
+
+// Warnings are shown in the menu.
+func (b *Broker) Warnings() []string {
+	b.rejMu.Lock()
+	defer b.rejMu.Unlock()
+	var out []string
+	for _, r := range b.rejected {
+		if b.now().Sub(r.at) > 6*time.Hour {
+			continue
+		}
+		msg := fmt.Sprintf("%s rejected your token (%d)", r.target, r.status)
+		if r.status == 403 {
+			msg = fmt.Sprintf("%s refused a request (403): the token may lack a scope", r.target)
+		}
+		if r.hint != "" {
+			msg += ": " + r.hint
+		}
+		out = append(out, msg)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (b *Broker) RevokeAll() int {
 	n := b.Grants.RevokeAll()
 	b.Audit.Write(audit.Entry{Event: "revoke", Detail: fmt.Sprintf("all (%d)", n)})
@@ -434,7 +524,7 @@ func (b *Broker) RevokeSession(profile string) int {
 func (b *Broker) Status() *protocol.Status {
 	cfg := b.Config()
 	s := &protocol.Status{Version: Version, StartedAt: b.started, UIConnected: b.Hub.UIConnected(),
-		ProxyListen: b.ProxyListen, PendingPrompt: b.Hub.Pending()}
+		ProxyListen: b.ProxyListen, PendingPrompt: b.Hub.Pending(), Warnings: b.Warnings()}
 	for _, id := range cfg.Identities {
 		s.Identities = append(s.Identities, id.Label())
 	}

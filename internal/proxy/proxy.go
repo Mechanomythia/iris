@@ -7,6 +7,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -237,6 +238,9 @@ func closeWrite(c net.Conn) {
 	}
 }
 
+// maxReplayBody: larger request bodies are streamed and never retried.
+const maxReplayBody = 4 << 20
+
 var hopHeaders = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"}
 
 func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostport string) {
@@ -252,7 +256,8 @@ func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostpor
 		out.Header.Del(h)
 	}
 
-	if id, ok := p.identityFor(host); ok {
+	id, inject := p.identityFor(host)
+	if inject {
 		for _, prefix := range id.BlockPaths {
 			if strings.HasPrefix(in.URL.Path, prefix) {
 				// Telemetry and the like: never worth a prompt or your token.
@@ -260,10 +265,35 @@ func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostpor
 				return
 			}
 		}
+	}
+	// A request carrying an injected token may be replayed once after a
+	// 401 (token refreshed on the host), so keep small bodies in memory.
+	var body []byte
+	replayable := false
+	if inject {
+		if out.Body == nil || out.Body == http.NoBody {
+			replayable = true
+		} else if out.ContentLength >= 0 && out.ContentLength <= maxReplayBody {
+			b, err := io.ReadAll(io.LimitReader(out.Body, maxReplayBody+1))
+			_ = out.Body.Close()
+			if err != nil {
+				http.Error(w, "iris proxy: reading request: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+			body, replayable = b, len(b) <= maxReplayBody
+		}
+	}
+	setBody := func() {
+		if body != nil {
+			out.Body = io.NopCloser(bytes.NewReader(body))
+			out.ContentLength = int64(len(body))
+		}
+	}
+	inj := func() bool {
 		cred, err := p.B.Credential(in.Context(), config.ToolHTTP, host, broker.ProcInfo{Argv: []string{in.Method + " " + scheme + "://" + hostport + in.URL.Path}})
 		if err != nil {
 			http.Error(w, "iris proxy: "+err.Error(), http.StatusForbidden)
-			return
+			return false
 		}
 		hdr := id.Header
 		if hdr == "" {
@@ -276,12 +306,35 @@ func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostpor
 		}
 		out.Header.Set(hdr, creds.HeaderValue(id, cred))
 		p.B.Audit.Write(audit.Entry{Event: "proxy-inject", Tool: config.ToolHTTP, Target: host, Detail: in.Method + " " + in.URL.Path})
+		return true
 	}
+	if inject && !inj() {
+		return
+	}
+	setBody()
 
 	resp, err := p.Transport.RoundTrip(out)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("iris proxy: upstream: %v", err), http.StatusBadGateway)
 		return
+	}
+	// A 401 drops the cached token and refreshes it on the host (if the
+	// identity knows how); the next request gets the fresh one either way.
+	if inject && resp.StatusCode == http.StatusUnauthorized && p.B.RefreshAfterReject(in.Context(), id) && replayable {
+		// The token was stale and the host refreshed it: try once more.
+		_ = resp.Body.Close()
+		if !inj() {
+			return
+		}
+		setBody()
+		resp, err = p.Transport.RoundTrip(out)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("iris proxy: upstream: %v", err), http.StatusBadGateway)
+			return
+		}
+	}
+	if inject {
+		p.B.NoteUpstream(id, resp.StatusCode, in.Method, in.URL.Path)
 	}
 	defer resp.Body.Close()
 	for _, h := range hopHeaders {
