@@ -23,7 +23,10 @@ type Grant struct {
 	Session bool
 	// Command binds the grant to one Bash command (Claude Code's tool use
 	// id): it covers every request that command makes, until it ends.
-	Command   string
+	Command string
+	// Reads: covers only reads (HTTP GET/HEAD, or a command iris classified
+	// as read-only); writes still ask.
+	Reads     bool
 	GrantedAt time.Time
 	ExpiresAt time.Time
 	Uses      int
@@ -133,24 +136,50 @@ func (s *Store) Add(tool, target, profile, scope, option string, ttl time.Durati
 // Use returns a live grant for (tool,target) and counts the use. Once-grants
 // are removed on use.
 func (s *Store) Use(tool, target, profile string) (*Grant, bool) {
+	return s.UseFor(tool, target, profile, false)
+}
+
+// UseFor returns a live grant covering this use: a full grant, or for a read
+// also a reads grant. Once-grants are removed on use.
+func (s *Store) UseFor(tool, target, profile string, read bool) (*Grant, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := key(tool, target, profile)
-	g, ok := s.g[k]
-	if !ok {
-		return nil, false
+	keys := []string{key(tool, target, profile)}
+	if read {
+		keys = append(keys, readsKey(tool, target, profile))
 	}
-	if !s.now().Before(g.ExpiresAt) {
-		delete(s.g, k)
-		return nil, false
+	for _, k := range keys {
+		g, ok := s.g[k]
+		if !ok {
+			continue
+		}
+		if !s.now().Before(g.ExpiresAt) {
+			delete(s.g, k)
+			continue
+		}
+		g.Uses++
+		cp := *g
+		if g.Once {
+			delete(s.g, k)
+		}
+		return &cp, true
 	}
-	g.Uses++
-	cp := *g
-	if g.Once {
-		delete(s.g, k)
-	}
-	return &cp, true
+	return nil, false
 }
+
+// AddReads records a grant for reads only, next to any full grant.
+func (s *Store) AddReads(tool, target, profile, scope, option string, ttl time.Duration, session bool) *Grant {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	g := &Grant{ID: NewID(), Tool: tool, Target: target, Profile: profile, Scope: scope, Option: option,
+		Session: session, Reads: true, GrantedAt: now, ExpiresAt: now.Add(ttl)}
+	s.g[readsKey(tool, target, profile)] = g
+	s.note(key(tool, target, profile), now)
+	return g
+}
+
+func readsKey(tool, target, profile string) string { return key(tool, target, profile) + "#reads" }
 
 // Revoke by id; returns number removed.
 func (s *Store) Revoke(id string) int {
@@ -199,7 +228,7 @@ func (s *Store) List() []protocol.GrantInfo {
 			continue
 		}
 		out = append(out, protocol.GrantInfo{ID: g.ID, Tool: g.Tool, Target: g.Target, Scope: g.Scope, Profile: g.Profile,
-			Option: g.Option, GrantedAt: g.GrantedAt, ExpiresAt: g.ExpiresAt, Uses: g.Uses})
+			Option: g.Option, Reads: g.Reads, GrantedAt: g.GrantedAt, ExpiresAt: g.ExpiresAt, Uses: g.Uses})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ExpiresAt.Before(out[j].ExpiresAt) })
 	return out

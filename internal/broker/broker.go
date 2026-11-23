@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mechanomythia/iris/internal/access"
 	"github.com/mechanomythia/iris/internal/approval"
 	"github.com/mechanomythia/iris/internal/audit"
 	"github.com/mechanomythia/iris/internal/config"
@@ -46,6 +47,9 @@ type Broker struct {
 	ctxMu    sync.Mutex
 	contexts []hookContext
 
+	autoMu sync.Mutex
+	auto   []protocol.Event // recent uses without a popup
+
 	rejMu     sync.Mutex
 	rejected  map[string]rejection // identity key → last upstream rejection
 	refreshed map[string]time.Time // identity key → last refresh run
@@ -81,6 +85,10 @@ type ProcInfo struct {
 	Cwd     string
 	Argv    []string
 	Profile string // Claude config dir label (self-reported)
+	// Access: "read"/"write" when the caller knows (the proxy, from the HTTP
+	// method); empty = decide from Claude's running command.
+	Access    string
+	AccessWhy string
 }
 
 func New(cfg *config.Config, cfgPath string, log *audit.Log) *Broker {
@@ -262,8 +270,11 @@ func (b *Broker) Credential(ctx context.Context, tool, target string, p ProcInfo
 }
 
 func (b *Broker) ensureGrant(ctx context.Context, cfg *config.Config, id config.Identity, p ProcInfo) (*grants.Grant, error) {
+	p.Access, p.AccessWhy = b.accessFor(id, p)
+	read := p.Access == access.Read
 	for attempt := 0; attempt < 3; attempt++ {
-		if g, ok := b.Grants.Use(id.Tool, id.Target, p.Profile); ok {
+		if g, ok := b.Grants.UseFor(id.Tool, id.Target, p.Profile, read); ok {
+			b.noteAuto(id, p, g)
 			return g, nil
 		}
 		// One prompt per identity and profile at a time; others wait for its outcome.
@@ -282,8 +293,9 @@ func (b *Broker) ensureGrant(ctx context.Context, cfg *config.Config, id config.
 		// check and here has already recorded its grant (ask adds the grant
 		// before the prompt entry is removed), so this closes the window
 		// that produced a second popup for the same request.
-		if g, ok := b.Grants.Use(id.Tool, id.Target, p.Profile); ok {
+		if g, ok := b.Grants.UseFor(id.Tool, id.Target, p.Profile, read); ok {
 			b.promptMu.Unlock()
+			b.noteAuto(id, p, g)
 			return g, nil
 		}
 		pr := &prompt{done: make(chan struct{})}
@@ -338,7 +350,7 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		ID: grants.NewID(), Identity: id, Profile: p.Profile, Command: command,
 		Recent: b.Grants.Recent(id.Tool, id.Target, p.Profile, 10*time.Minute),
 		PID:    p.PID, Cwd: p.Cwd, Argv: p.Argv, Options: opts, TouchID: cfg.Approval.TouchID,
-		Deadline: b.now().Add(timeout),
+		Deadline: b.now().Add(timeout), Access: p.Access, AccessWhy: p.AccessWhy,
 	}
 	d := b.Hub.Ask(ctx, req)
 	if d.Denied {
@@ -354,7 +366,9 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 		b.OnPersist(id)
 	}
 	var g *grants.Grant
-	if d.Option.Once && cmdID != "" {
+	if d.Option.Reads {
+		g = b.Grants.AddReads(id.Tool, id.Target, p.Profile, id.Scope, "reads "+d.Option.Name, d.Option.TTL, d.Option.Session)
+	} else if d.Option.Once && cmdID != "" {
 		g = b.Grants.AddForCommand(id.Tool, id.Target, p.Profile, id.Scope, "command", cmdID)
 	} else {
 		g = b.Grants.Add(id.Tool, id.Target, p.Profile, id.Scope, d.Option.Name, d.Option.TTL, d.Option.Once, d.Option.Session)
@@ -362,7 +376,7 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 	b.Audit.Write(audit.Entry{Event: "grant", Tool: id.Tool, Target: id.Target, Scope: id.Scope, Profile: p.Profile, GrantID: g.ID,
 		Option: g.Option, PID: p.PID, Cwd: p.Cwd, Command: req.Command, Detail: "via " + d.Via})
 	b.Hub.Broadcast(protocol.Event{Type: "grants_changed"})
-	gg, ok := b.Grants.Use(id.Tool, id.Target, p.Profile)
+	gg, ok := b.Grants.UseFor(id.Tool, id.Target, p.Profile, p.Access == access.Read)
 	if !ok {
 		return nil, nil // revoked in between; loop re-prompts
 	}
@@ -496,6 +510,84 @@ func (b *Broker) Warnings() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// accessFor decides read or write. The caller may know (HTTP method);
+// otherwise every running command that could have triggered this tool must
+// be a read, so a concurrent write can't hide behind a read.
+func (b *Broker) accessFor(id config.Identity, p ProcInfo) (string, string) {
+	if p.Access != "" {
+		return p.Access, p.AccessWhy
+	}
+	tool := id.Tool
+	switch {
+	case tool == config.ToolNetwork:
+		return access.Write, "network access"
+	case tool == config.ToolSSH && strings.HasPrefix(id.Target, "signature:"):
+		return access.Write, "signs a commit or tag"
+	case tool == config.ToolHTTP:
+		return access.Write, "unknown request"
+	}
+	b.ctxMu.Lock()
+	defer b.ctxMu.Unlock()
+	now := b.now()
+	var whys []string
+	for _, c := range b.contexts {
+		if now.Sub(c.at) > contextWindow(c) || (p.Profile != "" && c.profile != "" && c.profile != p.Profile) {
+			continue
+		}
+		mentions := false
+		for _, w := range toolWords[tool] {
+			if containsWord(c.command, w) {
+				mentions = true
+				break
+			}
+		}
+		if !mentions {
+			continue
+		}
+		lvl, why := access.Command(tool, c.command)
+		if lvl != access.Read {
+			return access.Write, why
+		}
+		whys = append(whys, why)
+	}
+	if len(whys) == 0 {
+		return access.Write, "no command reported for it"
+	}
+	return access.Read, strings.Join(whys, "; ")
+}
+
+// maxAuto: auto-allowed uses kept for the menu.
+const maxAuto = 100
+
+// noteAuto records a use that went through without a popup (an existing
+// grant covered it) and tells the menu bar.
+func (b *Broker) noteAuto(id config.Identity, p ProcInfo, g *grants.Grant) {
+	detail := ""
+	if len(p.Argv) > 0 && id.Tool == config.ToolHTTP {
+		detail = p.Argv[0]
+	} else if cmd, _ := b.contextFor(id.Tool, p.Profile); cmd != "" {
+		detail = cmd
+	} else if len(p.Argv) > 0 {
+		detail = strings.Join(p.Argv, " ")
+	}
+	ev := protocol.Event{Type: "auto_allowed", ID: g.ID, Tool: id.Tool, Target: id.Target, Scope: id.Scope, Label: id.Label(),
+		Profile: p.Profile, Access: p.Access, AccessWhy: p.AccessWhy, Time: b.now(), Grant: g.Option, Reads: g.Reads, Detail: detail}
+	b.autoMu.Lock()
+	b.auto = append(b.auto, ev)
+	if len(b.auto) > maxAuto {
+		b.auto = b.auto[len(b.auto)-maxAuto:]
+	}
+	b.autoMu.Unlock()
+	b.Hub.Broadcast(ev)
+}
+
+// Auto returns the recent auto-allowed uses, newest last.
+func (b *Broker) Auto() []protocol.Event {
+	b.autoMu.Lock()
+	defer b.autoMu.Unlock()
+	return append([]protocol.Event(nil), b.auto...)
 }
 
 func (b *Broker) RevokeAll() int {

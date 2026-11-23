@@ -368,6 +368,8 @@ type Option struct {
 	Persist bool
 	// Label overrides the button text (once → "this command").
 	Label string
+	// Reads: the grant covers reads only (chosen as "reads:<name>").
+	Reads bool
 }
 
 func ParseOption(s string, sessionMax time.Duration) (Option, error) {

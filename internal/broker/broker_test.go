@@ -331,3 +331,68 @@ func TestOnceCoversTheWholeCommand(t *testing.T) {
 		t.Fatalf("no context: once per request, got %d prompts", n)
 	}
 }
+
+// A reads grant covers later reads without a popup (and reports them as
+// auto-allowed) but never a write.
+func TestReadsGrant(t *testing.T) {
+	e := start(t)
+	ctx := context.Background()
+	var asked []approval.Request
+	e.b.Hub.Fallback = func(_ context.Context, r approval.Request) (string, error) {
+		asked = append(asked, r)
+		if r.Access == "read" {
+			return "reads:15m", nil
+		}
+		return "deny", nil
+	}
+	read := ProcInfo{Access: "read", AccessWhy: "GET request"}
+	write := ProcInfo{Access: "write", AccessWhy: "POST request"}
+	if _, err := e.b.Credential(ctx, "kube", "staging", read); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.b.Credential(ctx, "kube", "staging", read); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0].Access != "read" {
+		t.Fatalf("want one prompt for the first read, got %d", len(asked))
+	}
+	if a := e.b.Auto(); len(a) != 1 || !a[0].Reads || a[0].Access != "read" {
+		t.Fatalf("auto: %+v", a)
+	}
+	if _, err := e.b.Credential(ctx, "kube", "staging", write); err == nil {
+		t.Fatal("a write must not ride on a reads grant")
+	}
+	if len(asked) != 2 || asked[1].Access != "write" {
+		t.Fatalf("the write should have asked: %d prompts", len(asked))
+	}
+	// "reads:" is refused for a write request, whatever the UI sends.
+	e.b.Hub.Fallback = func(context.Context, approval.Request) (string, error) { return "reads:15m", nil }
+	if _, err := e.b.Credential(ctx, "aws", "dev", write); err == nil {
+		t.Fatal("reads: on a write must fail closed")
+	}
+}
+
+// Without a caller-supplied access, the running commands decide; a write
+// running next to a read makes it a write.
+func TestAccessFromCommands(t *testing.T) {
+	e := start(t)
+	id := config.Identity{Tool: "kube", Target: "staging"}
+	if lvl, _ := e.b.accessFor(id, ProcInfo{}); lvl != "write" {
+		t.Fatal("no command: write")
+	}
+	e.b.AddContext("kubectl get pods", "/", "s", "", "t1")
+	if lvl, why := e.b.accessFor(id, ProcInfo{}); lvl != "read" {
+		t.Fatalf("kubectl get: %s (%s)", lvl, why)
+	}
+	e.b.AddContext("kubectl delete pod x", "/", "s", "", "t2")
+	if lvl, _ := e.b.accessFor(id, ProcInfo{}); lvl != "write" {
+		t.Fatal("concurrent delete must make it a write")
+	}
+	e.b.EndContext("t2")
+	if lvl, _ := e.b.accessFor(id, ProcInfo{}); lvl != "read" {
+		t.Fatal("after the delete ended: read again")
+	}
+	if lvl, _ := e.b.accessFor(config.Identity{Tool: "ssh", Target: "signature:git"}, ProcInfo{}); lvl != "write" {
+		t.Fatal("signing is a write")
+	}
+}

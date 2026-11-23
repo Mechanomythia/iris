@@ -24,12 +24,16 @@ type Request struct {
 	Profile  string // Claude config dir label
 	Command  string // from PreToolUse hook, advisory only
 	Recent   int    // approvals of the same thing in the last 10 minutes
-	PID      int
-	Cwd      string
-	Argv     []string
-	Options  []config.Option
-	TouchID  bool
-	Deadline time.Time
+	// Access is "read" or "write"; AccessWhy says how iris decided. Reads
+	// can be granted for a while with "reads:<option>".
+	Access    string
+	AccessWhy string
+	PID       int
+	Cwd       string
+	Argv      []string
+	Options   []config.Option
+	TouchID   bool
+	Deadline  time.Time
 }
 
 type Decision struct {
@@ -152,6 +156,19 @@ func resolve(r Request, choice, via string) Decision {
 	if choice == "deny" {
 		return Decision{Denied: true, Via: via}
 	}
+	if name, ok := strings.CutPrefix(choice, "reads:"); ok {
+		// Only for a read, and only a timed option: never fail open.
+		if r.Access != "read" {
+			return Decision{Denied: true, Via: via}
+		}
+		for _, o := range r.Options {
+			if o.Name == name && !o.Once && !o.Persist {
+				o.Reads = true
+				return Decision{Option: o, Via: via}
+			}
+		}
+		return Decision{Denied: true, Via: via}
+	}
 	for _, o := range r.Options {
 		if o.Name == choice {
 			return Decision{Option: o, Via: via}
@@ -167,6 +184,7 @@ func Event(r Request) protocol.Event {
 		Tool: r.Identity.Tool, Target: r.Identity.Target, Scope: r.Identity.Scope, Label: r.Identity.Label(), Profile: r.Profile, Passthrough: r.Identity.Source.Passthrough,
 		Command: r.Command, ProcessPID: r.PID, ProcessCwd: r.Cwd, ProcessArgv: r.Argv,
 		TouchID: r.TouchID, Deadline: r.Deadline, Recent: r.Recent,
+		Access: r.Access, AccessWhy: r.AccessWhy,
 	}
 	for _, sp := range shellfmt.Highlight(r.Command) {
 		ev.CommandSpans = append(ev.CommandSpans, protocol.CommandSpan{Text: sp.Text, Kind: sp.Kind})

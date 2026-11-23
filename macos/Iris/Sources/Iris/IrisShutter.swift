@@ -192,7 +192,8 @@ struct Shake: GeometryEffect {
 enum IrisIcon {
     enum State { case disconnected, closed, open }
 
-    static func image(_ state: State) -> NSImage {
+    /// `flutter` (0…1) opens the iris further for the auto-allowed animation.
+    static func image(_ state: State, flutter: CGFloat = 0) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let img = NSImage(size: size, flipped: false) { rect in
             guard let cg = NSGraphicsContext.current?.cgContext else { return false }
@@ -202,12 +203,12 @@ enum IrisIcon {
             cg.setLineWidth(1.6)
             cg.strokeEllipse(in: CGRect(x: c.x - r - 0.6, y: c.y - r - 0.6, width: 2 * r + 1.2, height: 2 * r + 1.2))
 
-            let open: CGFloat = state == .open ? 0.55 : 0
+            let open: CGFloat = max(state == .open ? 0.55 : 0, flutter)
             let g = IrisGeometry(center: c, radius: r, openness: open, count: 7)
             cg.saveGState()
             cg.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
             cg.clip()
-            if state == .open {
+            if open > 0.01 {
                 // Fill the blades so the opening reads as a hole.
                 cg.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
                 for i in 0..<7 {

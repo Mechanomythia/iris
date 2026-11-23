@@ -14,7 +14,14 @@ struct IrisApp: App {
         MenuBarExtra {
             MenuContent().environmentObject(state).environmentObject(updater)
         } label: {
-            Image(nsImage: IrisIcon.image(menuIcon))
+            // The iris flutters and one line names what just went through
+            // without a popup; the menu lists them all.
+            HStack(spacing: 4) {
+                Image(nsImage: IrisIcon.image(menuIcon, flutter: state.iconOpenness))
+                if let t = state.tickerText {
+                    Text(t)
+                }
+            }
         }
         .menuBarExtraStyle(.window)
     }
@@ -37,6 +44,7 @@ struct MenuContent: View {
             header
             versionMismatch
             upstreamWarnings
+            autoPlate
             grantsPlate
             recentPlate
             actions
@@ -137,6 +145,25 @@ struct MenuContent: View {
         }
     }
 
+    // MARK: allowed without asking
+
+    @ViewBuilder private var autoPlate: some View {
+        if !state.autoAllowed.isEmpty {
+            Plate(title: "Allowed without asking", caption: "\(state.autoAllowed.count)") {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(state.autoAllowed.prefix(40).enumerated()), id: \.offset) { i, e in
+                            if i > 0 { Neatline() }
+                            AutoRow(event: e)
+                        }
+                    }
+                }
+                // A ScrollView has no height of its own in the menu window.
+                .frame(height: min(CGFloat(min(state.autoAllowed.count, 40)) * 46, 230))
+            }
+        }
+    }
+
     // MARK: recent
 
     private var recentPlate: some View {
@@ -230,6 +257,7 @@ struct GrantRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Hy.s2) {
                     Text(grant.tool).font(Hy.ui(13.5, 600)).foregroundStyle(Hy.starlight)
+                    if grant.reads == true { HyTag(text: "reads only", kind: .a) }
                     if !grant.scope.isEmpty { HyTag(text: grant.scope) }
                     if let p = grant.profile, !p.isEmpty { HyTag(text: p, kind: .a) }
                 }
@@ -251,6 +279,37 @@ struct GrantRow: View {
         .padding(.vertical, Hy.s3)
         .background(hover ? Hy.skyHigh : .clear)
         .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hover = h } }
+    }
+}
+
+/// One use that an existing grant covered, so no popup appeared.
+struct AutoRow: View {
+    let event: BrokerEvent
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Hy.s3) {
+            Text(event.time ?? Date(), format: .dateTime.hour().minute().second())
+                .font(Hy.mono(11))
+                .foregroundStyle(Hy.faint)
+                .frame(width: 58, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Hy.s2) {
+                    HyTag(text: event.access ?? "use", kind: event.access == "read" ? .a : .k)
+                    Text(AppState.describe(event))
+                        .font(Hy.mono(11.5))
+                        .foregroundStyle(Hy.dust)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Text("covered by \(event.grant ?? "a grant")" + (event.profile.map { " · \($0)" } ?? ""))
+                    .font(Hy.ui(10.5))
+                    .foregroundStyle(Hy.faint)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Hy.s4)
+        .padding(.vertical, Hy.s2)
+        .help(event.detail ?? "")
     }
 }
 

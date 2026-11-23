@@ -11,6 +11,13 @@ final class AppState: ObservableObject {
     @Published var recent: [AuditEntry] = []
     @Published var lastError: String?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// Uses that went through without a popup, newest first.
+    @Published var autoAllowed: [BrokerEvent] = []
+    /// Menu bar iris aperture while it flutters for an auto-allowed use.
+    @Published var iconOpenness: CGFloat = 0
+    @Published var now = Date()
+    private var flutter: Timer?
+    private var clock: Timer?
 
     private let subscription = Subscription()
     private var panels: [String: ApprovalPanelController] = [:]
@@ -26,6 +33,10 @@ final class AppState: ObservableObject {
         // Countdown labels + expiry pruning in the menu.
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
+        }
+        // The ticker fades after a while: keep "now" moving.
+        clock = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.now = Date() }
         }
     }
 
@@ -53,6 +64,11 @@ final class AppState: ObservableObject {
             if let id = ev.id, let p = panels.removeValue(forKey: id) { p.close() }
         case "grants_changed":
             refresh()
+        case "auto_allowed":
+            autoAllowed.insert(ev, at: 0)
+            if autoAllowed.count > 100 { autoAllowed.removeLast(autoAllowed.count - 100) }
+            now = Date()
+            flutterIcon()
         default:
             break
         }
@@ -92,6 +108,57 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: auto-allowed ticker
+
+    /// How long the menu bar shows the last auto-allowed use.
+    static let tickerSeconds: TimeInterval = 45
+
+    /// One line for the menu bar, or nil when nothing happened lately.
+    var tickerText: String? {
+        guard let e = autoAllowed.first, let t = e.time, now.timeIntervalSince(t) < Self.tickerSeconds else { return nil }
+        let line = Self.describe(e)
+        return line.count > 42 ? String(line.prefix(41)) + "…" : line
+    }
+
+    /// "gitlab.com · GET …/merge_requests/510", "staging · kubectl get pods".
+    static func describe(_ e: BrokerEvent) -> String {
+        let target = e.target ?? e.tool ?? ""
+        var what = e.detail ?? ""
+        if e.tool == "http", let sp = what.firstIndex(of: " ") {
+            let method = what[..<sp]
+            var path = String(what[what.index(after: sp)...])
+            if let r = path.range(of: "://"), let slash = path[r.upperBound...].firstIndex(of: "/") {
+                path = String(path[slash...])
+            }
+            let parts = path.split(separator: "/")
+            path = parts.count > 2 ? "…/" + parts.suffix(2).joined(separator: "/") : path
+            what = "\(method) \(path)"
+        } else {
+            what = what.replacingOccurrences(of: "(latest Bash command) ", with: "")
+            what = what.split(whereSeparator: { $0 == "\n" }).first.map(String.init) ?? what
+        }
+        return what.isEmpty ? target : "\(target) · \(what)"
+    }
+
+    /// The menu bar iris opens a little and closes again.
+    private func flutterIcon() {
+        flutter?.invalidate()
+        let start = Date()
+        let duration = 0.9
+        flutter = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] t in
+            Task { @MainActor in
+                guard let self else { return t.invalidate() }
+                let x = Date().timeIntervalSince(start) / duration
+                if x >= 1 {
+                    self.iconOpenness = 0
+                    t.invalidate()
+                    return
+                }
+                self.iconOpenness = CGFloat(sin(x * .pi)) * 0.6 // open and close once
+            }
+        }
+    }
+
     // MARK: control actions
 
     func refresh() {
@@ -100,10 +167,12 @@ final class AppState: ObservableObject {
                 let g = try Control.call(["op": "grants"])
                 let s = try Control.call(["op": "status"])
                 let a = try Control.call(["op": "audit", "n": 8])
+                let auto = (try? Control.call(["op": "auto"]))?.auto
                 await MainActor.run {
                     self.grants = g.grants ?? []
                     self.status = s.status
                     self.recent = (a.audit ?? []).reversed()
+                    if let auto { self.autoAllowed = auto.reversed() }
                     self.lastError = nil
                     self.restartStaleBroker()
                 }

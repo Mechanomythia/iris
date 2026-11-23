@@ -178,6 +178,8 @@ func (s *Server) handleControl(ctx context.Context, nc net.Conn) {
 		switch req.Op {
 		case "status":
 			_ = c.Send(protocol.Response{OK: true, Status: s.B.Status()})
+		case "auto":
+			_ = c.Send(protocol.Response{OK: true, Auto: s.B.Auto()})
 		case "grants":
 			_ = c.Send(protocol.Response{OK: true, Grants: s.B.Grants.List()})
 		case "revoke":

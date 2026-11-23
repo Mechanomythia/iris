@@ -148,7 +148,11 @@ struct ApprovalView: View {
     @ObservedObject var shutter: ShutterModel
     let onChoice: (String) -> Void
     @State private var now = Date()
+    /// For a read: the time buttons allow reads only (on by default).
+    @State private var readsOnly = true
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var isRead: Bool { event.access == "read" }
 
     private var options: [OptionInfo] { event.options ?? [] }
     private var remaining: Int {
@@ -196,6 +200,10 @@ struct ApprovalView: View {
                         .foregroundStyle(Hy.classG)
                 }
                 HStack(spacing: Hy.s2) {
+                    if let a = event.access {
+                        HyTag(text: a == "read" ? "Read" : "Write", kind: a == "read" ? .a : .m)
+                            .help(event.accessWhy ?? "")
+                    }
                     if event.passthrough == true {
                         // Class K: your own identity is in play, read carefully.
                         HyTag(text: "Your credentials", kind: .k)
@@ -245,6 +253,22 @@ struct ApprovalView: View {
             if let cmd = event.command, !cmd.isEmpty {
                 row("Command") { CommandBox(command: cmd, spans: event.commandSpans) }
             }
+            if let why = event.accessWhy, !why.isEmpty {
+                row(isRead ? "Read" : "Write") {
+                    Text(why)
+                        .font(Hy.ui(12))
+                        .foregroundStyle(isRead ? Hy.classA : Hy.dust)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if isRead {
+                row("Grant") {
+                    Toggle(readsOnly ? "Time grants allow only reads on \(event.target ?? "this target"); writes keep asking"
+                                     : "Time grants allow everything on \(event.target ?? "this target"), writes included",
+                           isOn: $readsOnly)
+                        .toggleStyle(HyToggle(onLabel: "Reads only", offLabel: "Everything"))
+                }
+            }
             if let argv = event.argv, !argv.isEmpty {
                 row("Process") { mono(argv.joined(separator: " ")) }
             }
@@ -262,6 +286,15 @@ struct ApprovalView: View {
         }
         .padding(.horizontal, Hy.s5)
         .padding(.vertical, Hy.s4)
+    }
+
+    /// Titles stay short (the footer is full); the Grant row says whether
+    /// they cover reads only.
+    private func timedTitle(_ o: OptionInfo) -> String { o.display }
+
+    private func timedChoice(_ o: OptionInfo) -> String {
+        guard isRead, readsOnly, o.name != "always" else { return o.name }
+        return "reads:\(o.name)"
     }
 
     private func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
@@ -296,7 +329,7 @@ struct ApprovalView: View {
             // Longer options as secondary buttons, the shortest on the right:
             // with Touch ID armed it's the sensor itself (touch = allow once).
             ForEach(options.dropFirst(), id: \.self) { opt in
-                Button(opt.display) { onChoice(opt.name) }
+                Button(timedTitle(opt)) { onChoice(timedChoice(opt)) }
                     .buttonStyle(HyButton(kind: .secondary))
             }
             if let ctx = shutter.touchContext, let first = options.first {

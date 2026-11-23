@@ -243,7 +243,8 @@ func isSpecial(c byte) bool {
 func classify(toks []token) []token {
 	expectCmd := true
 	afterFor := false
-	glued := false // previous token is part of the same shell word
+	inWrapper := false // expecting the command after sudo/env/xargs: its flags come first
+	glued := false     // previous token is part of the same shell word
 	for i := range toks {
 		t := &toks[i]
 		switch t.kind {
@@ -269,6 +270,7 @@ func classify(toks []token) []token {
 		glued = true
 		if t.kind != Arg {
 			expectCmd = false
+			inWrapper = false
 			continue
 		}
 		w := t.text
@@ -283,9 +285,13 @@ func classify(toks []token) []token {
 		case expectCmd && isAssignment(w):
 			t.kind = Var
 			continue // still expecting the command
+		case expectCmd && inWrapper && strings.HasPrefix(w, "-"):
+			t.kind = Flag // xargs -n1 kubectl ...: still expecting the command
+			continue
 		case expectCmd:
 			t.kind = Cmd
 			expectCmd = wrappers[w]
+			inWrapper = expectCmd
 			continue
 		case strings.HasPrefix(w, "-") && len(w) > 1:
 			t.kind = Flag
@@ -416,4 +422,92 @@ func nextIsKeyword(toks []token, kws ...string) bool {
 		return false
 	}
 	return false
+}
+
+// Word is one shell word of a simple command (adjacent pieces joined).
+type Word struct {
+	Text string
+	Kind string // kind of its first piece: Cmd, Arg, Flag, Str, Var, Keyword
+}
+
+// Commands splits cmd into simple commands (split at ; && || | & ( ) { }
+// and newlines), including those inside $(...) and `...`, so a caller can
+// see every program a command line runs. Redirection targets are dropped.
+func Commands(cmd string) [][]Word {
+	cmd = strings.TrimPrefix(cmd, notePrefix)
+	var out [][]Word
+	var cur []Word
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, cur)
+		}
+		cur = nil
+	}
+	toks := classify(lex(cmd))
+	glued := false
+	skipNext := false
+	for _, t := range toks {
+		switch t.kind {
+		case Space, Comment:
+			glued = false
+			continue
+		case Break, Op:
+			flush()
+			glued = false
+			skipNext = false
+			continue
+		case Redir:
+			glued = false
+			// "2>&1" carries its target; "> file" takes the next word.
+			skipNext = !strings.Contains(t.text, "&") || strings.HasSuffix(t.text, "&") || strings.HasPrefix(t.text, "&")
+			continue
+		}
+		// Programs inside substitutions run too.
+		for _, inner := range substitutions(t.text, t.kind) {
+			out = append(out, Commands(inner)...)
+		}
+		if skipNext && !glued {
+			skipNext = false
+			glued = true
+			continue
+		}
+		if glued && len(cur) > 0 {
+			cur[len(cur)-1].Text += t.text
+			continue
+		}
+		if glued { // glued to a skipped redirection target
+			continue
+		}
+		cur = append(cur, Word{Text: t.text, Kind: t.kind})
+		glued = true
+	}
+	flush()
+	return out
+}
+
+// substitutions returns the bodies of $(...) and `...` in a token (not in
+// single-quoted strings).
+func substitutions(text, kind string) []string {
+	if kind == Str && strings.HasPrefix(text, "'") {
+		return nil
+	}
+	var out []string
+	for i := 0; i < len(text); i++ {
+		switch {
+		case text[i] == '$' && i+1 < len(text) && text[i+1] == '(':
+			end := matchParen(text, i+1)
+			if end-1 > i+2 {
+				out = append(out, text[i+2:end-1])
+			}
+			i = end - 1
+		case text[i] == '`':
+			j := strings.IndexByte(text[i+1:], '`')
+			if j < 0 {
+				return out
+			}
+			out = append(out, text[i+1:i+1+j])
+			i += j + 1
+		}
+	}
+	return out
 }

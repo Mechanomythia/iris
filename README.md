@@ -150,6 +150,17 @@ iris restart
 
 Setting these ports replaces Claude Code's own domain controls for sandbox traffic, so iris is the allowlist from then on. Every decision lands in the audit log.
 
+## Reads, writes, and what went through without asking
+
+Every request is a **read** or a **write**, and the popup shows which and why:
+
+- **HTTP APIs** (glab, curl through the proxy) are decided per request by the method: `GET`/`HEAD`/`OPTIONS` are reads. This is enforced: a reads grant never lets a `POST` through.
+- **Tokens and signatures** (kubectl, gcloud, aws, git, docker, SSH logins) are decided from the command Claude runs. It's a read only if every program in it is a known read (`kubectl get`, `gcloud … list`, `aws … describe-*`, `git fetch`, `docker pull`) or a harmless filter (`grep`, `jq`, `head`). Programs inside `$(…)` count too. Anything iris can't see into is a write: scripts, `bash -c`, `python`, a `$VAR` as the command, `kubectl get secret`. If another command that could use the same tool is running at the same time, it has to be a read as well. Signing a commit is always a write.
+
+For a read, the popup's **Grant** switch (on by default) makes the time buttons allow *reads only* on that tool and target, for 15 min, 1 h or the session. Writes keep asking.
+
+Uses that an existing grant covered, with no popup, are listed in the menu under **Allowed without asking**. The menu bar iris flutters for each one, and for 45 seconds a line next to it names the last one (`gitlab.com · GET …/merge_requests/510`).
+
 ## CLIs that keep their token in your Keychain (glab, gh): token injection
 
 Tools like `glab` store their token in your Keychain, which the sandbox can't read. Iris makes them work without ever giving the token to the sandbox:

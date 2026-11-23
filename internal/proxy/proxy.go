@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mechanomythia/iris/internal/access"
 	"github.com/mechanomythia/iris/internal/audit"
 	"github.com/mechanomythia/iris/internal/broker"
 	"github.com/mechanomythia/iris/internal/config"
@@ -290,7 +291,9 @@ func (p *Proxy) forward(w http.ResponseWriter, in *http.Request, scheme, hostpor
 		}
 	}
 	inj := func() bool {
-		cred, err := p.B.Credential(in.Context(), config.ToolHTTP, host, broker.ProcInfo{Argv: []string{in.Method + " " + scheme + "://" + hostport + in.URL.Path}})
+		lvl, why := access.HTTPMethod(in.Method)
+		cred, err := p.B.Credential(in.Context(), config.ToolHTTP, host, broker.ProcInfo{
+			Argv: []string{in.Method + " " + scheme + "://" + hostport + in.URL.Path}, Access: lvl, AccessWhy: why})
 		if err != nil {
 			http.Error(w, "iris proxy: "+err.Error(), http.StatusForbidden)
 			return false

@@ -30,6 +30,14 @@ struct BrokerEvent: Codable {
     var touchID: Bool?
     var deadline: Date?
     var recent: Int?
+    /// "read" or "write"; a read can be answered with "reads:<option>".
+    var access: String?
+    var accessWhy: String?
+    // auto_allowed: a use that went through without a popup.
+    var time: Date?
+    var grant: String?
+    var reads: Bool?
+    var detail: String?
 }
 
 struct GrantInfo: Codable, Identifiable, Hashable {
@@ -39,6 +47,7 @@ struct GrantInfo: Codable, Identifiable, Hashable {
     let scope: String
     var profile: String?
     let option: String
+    var reads: Bool?
     let grantedAt: Date
     let expiresAt: Date
     let uses: Int
@@ -72,6 +81,7 @@ struct BrokerResponse: Codable {
     var status: StatusInfo?
     var audit: [AuditEntry]?
     var revoked: Int?
+    var auto: [BrokerEvent]?
 }
 
 enum Wire {

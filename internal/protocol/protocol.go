@@ -57,6 +57,7 @@ type Response struct {
 	Audit      []json.RawMessage `json:"audit,omitempty"`
 	Revoked    int               `json:"revoked,omitempty"`
 	Detail     string            `json:"detail,omitempty"` // ssh-host: known | synced | unknown
+	Auto       []Event           `json:"auto,omitempty"`   // recent uses without a popup
 }
 
 // Credential is what the helper turns into tool-specific output.
@@ -78,6 +79,7 @@ type GrantInfo struct {
 	Scope     string    `json:"scope"`
 	Profile   string    `json:"profile,omitempty"`
 	Option    string    `json:"option"`
+	Reads     bool      `json:"reads,omitempty"`
 	GrantedAt time.Time `json:"grantedAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	Uses      int       `json:"uses"`
@@ -114,6 +116,16 @@ type Event struct {
 	TouchID      bool          `json:"touchID,omitempty"`
 	Deadline     time.Time     `json:"deadline,omitempty"`
 	Recent       int           `json:"recent,omitempty"` // approved this N times in the last 10 min
+	// Access: "read" or "write" (approval_request, auto_allowed). A read may
+	// be answered with "reads:<option>" to allow reads for that long.
+	Access    string `json:"access,omitempty"`
+	AccessWhy string `json:"accessWhy,omitempty"`
+
+	// auto_allowed: a use that went through without a popup.
+	Time   time.Time `json:"time,omitempty"`
+	Grant  string    `json:"grant,omitempty"` // option of the grant that covered it
+	Reads  bool      `json:"reads,omitempty"` // covered by a reads-only grant
+	Detail string    `json:"detail,omitempty"`
 }
 
 type CommandSpan struct {
