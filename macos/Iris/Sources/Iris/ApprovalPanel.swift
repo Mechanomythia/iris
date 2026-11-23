@@ -16,6 +16,8 @@ struct TouchIDView: NSViewRepresentable {
 /// Borderless panels can't become key by default; we need key for Return/Escape.
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    /// May sit over the menu bar while it grows out of the notch.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     override var canBecomeMain: Bool { false }
 }
 
@@ -36,35 +38,54 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         self.onChoice = onChoice
     }
 
+    private let morph = MorphModel()
+    private var geo: IslandGeometry?
+
+    /// The popup grows out of the island (the notch, or the top edge), then
+    /// settles at the centre of the screen.
     func show() {
         let view = ApprovalView(event: event, shutter: shutter) { [weak self] choice in self?.choose(choice) }
             .environment(\.colorScheme, .dark)
-        let host = NSHostingView(rootView: view)
-        let size = host.fittingSize
+        let size = NSHostingView(rootView: view).fittingSize
+        let g = IslandGeometry.current()
+        geo = g
+        let final = NSRect(origin: centeredOrigin(for: size), size: size)
+        let start = g.tucked
 
-        let p = KeyablePanel(contentRect: NSRect(origin: .zero, size: size),
+        let host = NSHostingView(rootView: MorphHost(morph: morph, size: size) { view })
+        host.sizingOptions = [] // the animated frame drives the size
+        let p = KeyablePanel(contentRect: start,
                              styleMask: [.borderless, .nonactivatingPanel],
                              backing: .buffered, defer: false)
         p.contentView = host
         p.isOpaque = false
         p.backgroundColor = .clear
-        p.hasShadow = true
-        p.level = .modalPanel
+        p.hasShadow = false // until it has landed
+        p.level = islandLevel // over the menu bar while it leaves the notch
         p.isFloatingPanel = true
         p.hidesOnDeactivate = false
         p.isMovableByWindowBackground = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         p.delegate = self
-        p.setFrameOrigin(centeredOrigin(for: size))
+        p.setFrame(start, display: false)
         panel = p
 
-        p.alphaValue = 0
+        p.alphaValue = 1
         NSApp.activate(ignoringOtherApps: true)
         p.makeKeyAndOrderFront(nil)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            p.animator().alphaValue = 1
-        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.45
+            ctx.timingFunction = islandTiming
+            p.animator().setFrame(final, display: true)
+        }, completionHandler: {
+            Task { @MainActor in
+                guard self.panel === p else { return }
+                p.level = .modalPanel
+                p.hasShadow = true
+                p.invalidateShadow()
+            }
+        })
+        withAnimation(.easeOut(duration: 0.3).delay(0.14)) { morph.open = true }
         NSSound(named: "Tink")?.play()
     }
 
@@ -104,7 +125,7 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         shutter.touchContext = ctx
         // The view must be on screen with this context before evaluating.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 550_000_000) // after the popup has landed
             guard self.shutter.touchContext === ctx, !self.decided else { return }
             ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, _ in
                 Task { @MainActor in
@@ -130,9 +151,16 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         guard let p = panel else { return }
         panel = nil
         p.delegate = nil
+        // Back into the island.
+        let g = geo ?? IslandGeometry.current()
+        p.hasShadow = false
+        p.level = islandLevel
+        withAnimation(.easeIn(duration: 0.16)) { morph.open = false }
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.12
-            p.animator().alphaValue = 0
+            ctx.duration = 0.34
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            p.animator().setFrame(g.tucked, display: true)
+            if !g.hasNotch { p.animator().alphaValue = 0 }
         }, completionHandler: { p.close() })
     }
 

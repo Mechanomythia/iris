@@ -14,14 +14,9 @@ struct IrisApp: App {
         MenuBarExtra {
             MenuContent().environmentObject(state).environmentObject(updater)
         } label: {
-            // The iris flutters and one line names what just went through
-            // without a popup; the menu lists them all.
-            HStack(spacing: 4) {
-                Image(nsImage: IrisIcon.image(menuIcon, flutter: state.iconOpenness))
-                if let t = state.tickerText {
-                    Text(t)
-                }
-            }
+            // The iris flutters for each use without a popup (fixed width,
+            // so the other menu bar icons stay put); the island shows what.
+            Image(nsImage: IrisIcon.image(menuIcon, flutter: state.iconOpenness))
         }
         .menuBarExtraStyle(.window)
     }

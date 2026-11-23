@@ -15,9 +15,8 @@ final class AppState: ObservableObject {
     @Published var autoAllowed: [BrokerEvent] = []
     /// Menu bar iris aperture while it flutters for an auto-allowed use.
     @Published var iconOpenness: CGFloat = 0
-    @Published var now = Date()
     private var flutter: Timer?
-    private var clock: Timer?
+    let island = IslandController()
 
     private let subscription = Subscription()
     private var panels: [String: ApprovalPanelController] = [:]
@@ -34,10 +33,7 @@ final class AppState: ObservableObject {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-        // The ticker fades after a while: keep "now" moving.
-        clock = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.now = Date() }
-        }
+
     }
 
     var activeGrantCount: Int { grants.filter { $0.expiresAt > Date() }.count }
@@ -67,8 +63,8 @@ final class AppState: ObservableObject {
         case "auto_allowed":
             autoAllowed.insert(ev, at: 0)
             if autoAllowed.count > 100 { autoAllowed.removeLast(autoAllowed.count - 100) }
-            now = Date()
             flutterIcon()
+            island.show(autoAllowed)
         default:
             break
         }
@@ -109,16 +105,6 @@ final class AppState: ObservableObject {
     }
 
     // MARK: auto-allowed ticker
-
-    /// How long the menu bar shows the last auto-allowed use.
-    static let tickerSeconds: TimeInterval = 45
-
-    /// One line for the menu bar, or nil when nothing happened lately.
-    var tickerText: String? {
-        guard let e = autoAllowed.first, let t = e.time, now.timeIntervalSince(t) < Self.tickerSeconds else { return nil }
-        let line = Self.describe(e)
-        return line.count > 42 ? String(line.prefix(41)) + "…" : line
-    }
 
     /// "gitlab.com · GET …/merge_requests/510", "staging · kubectl get pods".
     static func describe(_ e: BrokerEvent) -> String {

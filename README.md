@@ -159,7 +159,7 @@ Every request is a **read** or a **write**, and the popup shows which and why:
 
 For a read, the popup's **Grant** switch (on by default) makes the time buttons allow *reads only* on that tool and target, for 15 min, 1 h or the session. Writes keep asking.
 
-Uses that an existing grant covered, with no popup, are listed in the menu under **Allowed without asking**. The menu bar iris flutters for each one, and for 45 seconds a line next to it names the last one (`gitlab.com · GET …/merge_requests/510`).
+Uses that an existing grant covered, with no popup, show up in **the island**: a black shape that grows out of the camera notch (or drops from the top edge on screens without one), with a ticker line naming each use (`gitlab.com · GET …/merge_requests/510`) and READ/WRITE beside the notch. Click it for the last eight; it tucks back after a few seconds. The menu bar iris flutters too, and the menu lists them under **Allowed without asking**. Approval popups grow out of the island and fold back into it.
 
 ## CLIs that keep their token in your Keychain (glab, gh): token injection
 
