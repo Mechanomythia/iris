@@ -32,9 +32,17 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
     private let offset: Int
     let shutter = ShutterModel()
 
-    init(event: BrokerEvent, offset: Int, onChoice: @escaping (String) -> Void) {
+    /// Docked: hangs from the notch, doesn't activate Iris (only the card
+    /// takes the keyboard), and grows from `from` (the island's line).
+    private let docked: Bool
+    private let from: NSRect?
+    var onFold: (() -> Void)?
+
+    init(event: BrokerEvent, offset: Int, docked: Bool = false, from: NSRect? = nil, onChoice: @escaping (String) -> Void) {
         self.event = event
         self.offset = offset
+        self.docked = docked
+        self.from = from
         self.onChoice = onChoice
     }
 
@@ -44,15 +52,19 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
     /// The popup grows out of the island (the notch, or the top edge), then
     /// settles at the centre of the screen.
     func show() {
-        let view = ApprovalView(event: event, shutter: shutter) { [weak self] choice in self?.choose(choice) }
+        let fold: (() -> Void)? = docked ? { [weak self] in self?.onFold?() } : nil
+        let view = ApprovalView(event: event, shutter: shutter, onChoice: { [weak self] choice in self?.choose(choice) }, onFold: fold)
             .environment(\.colorScheme, .dark)
         let size = NSHostingView(rootView: view).fittingSize
         let g = IslandGeometry.current()
         geo = g
-        let final = NSRect(origin: centeredOrigin(for: size), size: size)
-        let start = g.tucked
+        let inset = docked ? g.band : 0
+        let final = docked
+            ? g.hanging(width: size.width, height: size.height + inset)
+            : NSRect(origin: centeredOrigin(for: size), size: size)
+        let start = from ?? g.tucked
 
-        let host = NSHostingView(rootView: MorphHost(morph: morph, size: size) { view })
+        let host = NSHostingView(rootView: MorphHost(morph: morph, size: size, topInset: inset, docked: docked) { view })
         host.sizingOptions = [] // the animated frame drives the size
         let p = KeyablePanel(contentRect: start,
                              styleMask: [.borderless, .nonactivatingPanel],
@@ -71,7 +83,9 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         panel = p
 
         p.alphaValue = 1
-        NSApp.activate(ignoringOtherApps: true)
+        if !docked {
+            NSApp.activate(ignoringOtherApps: true)
+        } // docked: a non-activating panel takes the keyboard, your app stays in front
         p.makeKeyAndOrderFront(nil)
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.45
@@ -80,7 +94,7 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         }, completionHandler: {
             Task { @MainActor in
                 guard self.panel === p else { return }
-                p.level = .modalPanel
+                if !self.docked { p.level = .modalPanel }
                 p.hasShadow = true
                 p.invalidateShadow()
             }
@@ -145,6 +159,26 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
         ctx.invalidate()
     }
 
+    /// Folds back into the island's line without deciding (docked, Esc).
+    func fold(then done: @escaping @MainActor () -> Void) {
+        disarmTouchID()
+        decided = true
+        guard let p = panel else { return done() }
+        panel = nil
+        p.delegate = nil
+        let target = from ?? (geo ?? IslandGeometry.current()).tucked
+        p.hasShadow = false
+        withAnimation(.easeIn(duration: 0.16)) { morph.open = false }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            p.animator().setFrame(target, display: true)
+        }, completionHandler: {
+            p.close()
+            Task { @MainActor in done() }
+        })
+    }
+
     func close() {
         disarmTouchID()
         decided = true
@@ -175,6 +209,8 @@ struct ApprovalView: View {
     let event: BrokerEvent
     @ObservedObject var shutter: ShutterModel
     let onChoice: (String) -> Void
+    /// Docked under the notch: Escape folds the card back without deciding.
+    var onFold: (() -> Void)? = nil
     @State private var now = Date()
     /// For a read: the time buttons allow reads only (on by default).
     @State private var readsOnly = true
@@ -345,10 +381,19 @@ struct ApprovalView: View {
 
     private var footer: some View {
         HStack(spacing: Hy.s2) {
-            Button("Deny") { onChoice("deny") }
-                .buttonStyle(HyButton(kind: .danger))
-                .keyboardShortcut(.cancelAction)
-            Text("\(remaining)s")
+            if let onFold {
+                Button("Deny") { onChoice("deny") }
+                    .buttonStyle(HyButton(kind: .danger))
+                Button("Later") { onFold() }
+                    .buttonStyle(HyButton(kind: .quiet))
+                    .keyboardShortcut(.cancelAction)
+                    .help("Fold back into the notch (Esc); the request keeps waiting")
+            } else {
+                Button("Deny") { onChoice("deny") }
+                    .buttonStyle(HyButton(kind: .danger))
+                    .keyboardShortcut(.cancelAction)
+            }
+            Text(remaining >= 90 ? String(format: "%d:%02d", remaining / 60, remaining % 60) : "\(remaining)s")
                 .font(Hy.mono(11))
                 .monospacedDigit()
                 .foregroundStyle(remaining <= 10 ? Hy.classK : Hy.faint)

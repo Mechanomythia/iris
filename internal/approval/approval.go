@@ -46,6 +46,8 @@ type Decision struct {
 // Subscriber is a connected UI.
 type Subscriber struct {
 	ch chan protocol.Event
+	// Quiet: this UI shows requests as a line that doesn't take focus.
+	quiet bool
 }
 
 func (s *Subscriber) Events() <-chan protocol.Event { return s.ch }
@@ -77,6 +79,28 @@ func (h *Hub) Unsubscribe(s *Subscriber) {
 		close(s.ch)
 	}
 	h.mu.Unlock()
+}
+
+// SetQuiet records how a UI shows requests.
+func (h *Hub) SetQuiet(s *Subscriber, quiet bool) {
+	h.mu.Lock()
+	s.quiet = quiet
+	h.mu.Unlock()
+}
+
+// Quiet: every connected UI shows requests quietly (longer timeout).
+func (h *Hub) Quiet() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.subs) == 0 {
+		return false
+	}
+	for s := range h.subs {
+		if !s.quiet {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Hub) UIConnected() bool {

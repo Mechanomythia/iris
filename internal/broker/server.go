@@ -234,6 +234,8 @@ func (s *Server) subscribe(ctx context.Context, c *protocol.Conn) {
 			switch req.Op {
 			case "decision":
 				s.B.Hub.Decide(req.ID, req.Choice)
+			case "ui-mode":
+				s.B.Hub.SetQuiet(sub, req.Quiet)
 			case "revoke":
 				if req.All {
 					s.B.RevokeAll()

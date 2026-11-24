@@ -80,6 +80,9 @@ type Claude struct {
 type Approval struct {
 	// Timeout after which an unanswered prompt counts as Deny.
 	Timeout Duration `yaml:"timeout"`
+	// QuietTimeout replaces Timeout while the app shows requests as a quiet
+	// line in the island (no focus taken), which is easier to miss.
+	QuietTimeout Duration `yaml:"quietTimeout,omitempty"`
 	// Options offered in the popup, shortest first. Allowed: once, 15m, 1h, session, or any Go duration.
 	Options []string `yaml:"options"`
 	// SessionMax caps a "session" grant (it is also revoked by the SessionEnd hook).
@@ -174,10 +177,11 @@ func (i Identity) Label() string {
 func Default() *Config {
 	return &Config{
 		Approval: Approval{
-			Timeout:    Duration{60 * time.Second},
-			Options:    []string{"once", "15m", "1h", "session"},
-			SessionMax: Duration{8 * time.Hour},
-			TouchID:    true,
+			Timeout:      Duration{60 * time.Second},
+			QuietTimeout: Duration{3 * time.Minute},
+			Options:      []string{"once", "15m", "1h", "session"},
+			SessionMax:   Duration{8 * time.Hour},
+			TouchID:      true,
 		},
 		Proxy: Proxy{Enabled: false, Listen: "127.0.0.1:18899"},
 	}

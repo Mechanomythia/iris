@@ -45,6 +45,7 @@ type Request struct {
 	All    bool   `json:"all,omitempty"`    // revoke
 	Choice string `json:"choice,omitempty"` // decision: deny | once | 15m | ...
 	N      int    `json:"n,omitempty"`      // audit lines
+	Quiet  bool   `json:"quiet,omitempty"`  // ui-mode: requests as a quiet island line
 }
 
 type Response struct {

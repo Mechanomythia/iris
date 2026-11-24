@@ -17,6 +17,13 @@ final class AppState: ObservableObject {
     @Published var iconOpenness: CGFloat = 0
     private var flutter: Timer?
     let island = IslandController()
+    /// Requests as a quiet line in the island (unfold with the shortcut)
+    /// instead of a popup that takes focus.
+    @Published var quietRequests = UserDefaults.standard.object(forKey: "quietRequests") as? Bool ?? true
+    @Published var shortcut = HotKey.saved
+    @Published var recordingShortcut = false
+    private let hotKey = HotKey()
+    private var recorder: Any?
 
     private let subscription = Subscription()
     private var panels: [String: ApprovalPanelController] = [:]
@@ -24,9 +31,17 @@ final class AppState: ObservableObject {
 
     init() {
         subscription.onConnection = { [weak self] up in
-            self?.connected = up
-            if up { self?.refresh() }
+            guard let self else { return }
+            self.connected = up
+            if up {
+                self.refresh()
+                self.subscription.send(["op": "ui-mode", "quiet": self.quietRequests])
+            }
         }
+        island.onUnfold = { [weak self] in self?.unfoldRequest() }
+        island.model.shortcut = shortcut.display
+        HotKey.action = { [weak self] in self?.unfoldRequest() }
+        hotKey.register(shortcut)
         subscription.onEvent = { [weak self] ev in self?.handle(ev) }
         subscription.start()
         // Countdown labels + expiry pruning in the menu.
@@ -44,20 +59,24 @@ final class AppState: ObservableObject {
         switch ev.type {
         case "approval_request":
             guard let id = ev.id, panels[id] == nil else { return }
+            if quietRequests {
+                island.enqueue(ev) // a line under the notch; nothing takes focus
+                return
+            }
             let c = ApprovalPanelController(event: ev, offset: panels.count) { [weak self] choice in
                 self?.decide(ev, choice: choice)
             }
             panels[id] = c
             c.show()
-            // Like 1Password: Touch ID is armed right away, touch = allow once.
-            if ev.touchID == true, let first = ev.options?.first {
-                let who = ev.profile.map { "Claude (\($0))" } ?? "Claude"
-                c.armTouchID(reason: "allow \(who) to use \(ev.label ?? "a credential") once") { [weak self] in
-                    self?.decide(ev, choice: first.name, authenticated: true)
+            armTouchID(c, ev)
+        case "cancel":
+            if let id = ev.id {
+                island.remove(id)
+                if let p = panels.removeValue(forKey: id) {
+                    p.close()
+                    if island.cardOpen { cardClosed() }
                 }
             }
-        case "cancel":
-            if let id = ev.id, let p = panels.removeValue(forKey: id) { p.close() }
         case "grants_changed":
             refresh()
         case "auto_allowed":
@@ -70,13 +89,89 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Like 1Password: Touch ID is armed right away, touch = allow once.
+    private func armTouchID(_ c: ApprovalPanelController, _ ev: BrokerEvent) {
+        guard ev.touchID == true, let first = ev.options?.first else { return }
+        let who = ev.profile.map { "Claude (\($0))" } ?? "Claude"
+        c.armTouchID(reason: "allow \(who) to use \(ev.label ?? "a credential") once") { [weak self] in
+            self?.decide(ev, choice: first.name, authenticated: true)
+        }
+    }
+
+    // MARK: island requests
+
+    /// The shortcut (or a click on the line): the first waiting request
+    /// unfolds from the notch into the full card.
+    func unfoldRequest() {
+        guard !island.cardOpen, let ev = island.model.requests.first, let id = ev.id else { return }
+        let from = island.requestFrame
+        island.cardWillOpen()
+        let c = ApprovalPanelController(event: ev, offset: 0, docked: true, from: from) { [weak self] choice in
+            self?.decide(ev, choice: choice)
+        }
+        c.onFold = { [weak self, weak c] in
+            guard let self, let c else { return }
+            c.fold {
+                self.panels.removeValue(forKey: id)
+                self.island.cardDidClose()
+            }
+        }
+        panels[id] = c
+        c.show()
+        armTouchID(c, ev)
+    }
+
+    /// After the card has folded back into the notch.
+    private func cardClosed() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 360_000_000)
+            self.island.cardDidClose()
+        }
+    }
+
+    func setQuietRequests(_ on: Bool) {
+        quietRequests = on
+        UserDefaults.standard.set(on, forKey: "quietRequests")
+        subscription.send(["op": "ui-mode", "quiet": on])
+    }
+
+    /// The next key press with ⌘, ⌥ or ⌃ becomes the shortcut; Esc cancels.
+    func recordShortcut() {
+        guard recorder == nil else { return }
+        recordingShortcut = true
+        hotKey.unregister() // so pressing the current one records it again
+        recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self else { return e }
+            if e.keyCode == 53 { // Esc
+                self.stopRecording()
+                return nil
+            }
+            guard let c = HotKey.combo(from: e) else { return nil }
+            self.shortcut = c
+            HotKey.saved = c
+            self.island.model.shortcut = c.display
+            self.stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let r = recorder { NSEvent.removeMonitor(r) }
+        recorder = nil
+        recordingShortcut = false
+        hotKey.register(shortcut)
+    }
+
     private func decide(_ ev: BrokerEvent, choice: String, authenticated: Bool = false) {
         guard let id = ev.id else { return }
         let panel = panels[id]
         if !authenticated { panel?.disarmTouchID() }
         let send: @MainActor (String) -> Void = { [weak self] c in
-            self?.subscription.send(["op": "decision", "id": id, "choice": c])
-            self?.panels.removeValue(forKey: id)?.close()
+            guard let self else { return }
+            self.subscription.send(["op": "decision", "id": id, "choice": c])
+            self.panels.removeValue(forKey: id)?.close()
+            self.island.remove(id)
+            if self.island.cardOpen { self.cardClosed() }
         }
         // The iris opens only once access is actually granted (after Touch ID
         // when required); the decision is sent when the animation finishes.

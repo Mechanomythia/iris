@@ -346,6 +346,9 @@ func (b *Broker) ask(ctx context.Context, cfg *config.Config, id config.Identity
 	if timeout <= 0 {
 		timeout = time.Minute
 	}
+	if q := cfg.Approval.QuietTimeout.Duration; q > 0 && b.Hub.Quiet() {
+		timeout = q // a quiet line is easier to miss than a popup
+	}
 	req := approval.Request{
 		ID: grants.NewID(), Identity: id, Profile: p.Profile, Command: command,
 		Recent: b.Grants.Recent(id.Tool, id.Target, p.Profile, 10*time.Minute),

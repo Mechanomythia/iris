@@ -206,6 +206,18 @@ struct MenuContent: View {
 
             Neatline()
 
+            Toggle("Requests in the notch", isOn: Binding(get: { state.quietRequests }, set: { state.setQuietRequests($0) }))
+                .toggleStyle(HyToggle(onLabel: "Notch", offLabel: "Popup"))
+                .help("Notch: a quiet line that doesn't take focus; the shortcut unfolds it. Popup: a centred popup right away.")
+            if state.quietRequests {
+                HStack(spacing: Hy.s3) {
+                    Text("Open a request").font(Hy.ui(13)).foregroundStyle(Hy.starlight)
+                    Spacer()
+                    Button(state.recordingShortcut ? "Press keys… (Esc cancels)" : state.shortcut.display) { state.recordShortcut() }
+                        .buttonStyle(HyButton(kind: .secondary, small: true))
+                }
+            }
+
             Toggle("Launch at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
                 .toggleStyle(HyToggle(onLabel: "On", offLabel: "Off"))
 

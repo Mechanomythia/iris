@@ -150,6 +150,10 @@ iris restart
 
 Setting these ports replaces Claude Code's own domain controls for sandbox traffic, so iris is the allowlist from then on. Every decision lands in the audit log.
 
+## Requests in the notch
+
+By default a request doesn't pop up and take focus. It waits as one quiet line under the notch: what it's for, the target, the command, READ/WRITE, how many more are waiting, and a countdown (3 minutes; `approval.quietTimeout`). Press **⌥⌘I** (record your own shortcut in the menu) or click the line. The full request unfolds from the notch, with the command, why it's a read or write, the Grant switch and Touch ID. Only that card takes the keyboard; your app stays in front. **Esc** (Later) folds it back, still waiting. Allowing or denying folds it into the notch and shows the next one. Touch ID only works on the unfolded card, so you read before you approve. Switch **Requests in the notch** to *Popup* in the menu for the old centred popup.
+
 ## Reads, writes, and what went through without asking
 
 Every request is a **read** or a **write**, and the popup shows which and why:

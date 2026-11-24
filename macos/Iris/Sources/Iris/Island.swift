@@ -102,8 +102,11 @@ final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
 
 @MainActor
 final class IslandModel: ObservableObject {
-    enum Mode { case hidden, ticker, expanded }
+    enum Mode { case hidden, ticker, expanded, request }
     @Published var mode: Mode = .hidden
+    /// Waiting approval requests, oldest first: shown as one quiet line.
+    @Published var requests: [BrokerEvent] = []
+    @Published var shortcut = HotKey.defaultCombo.display
     /// Newest first.
     @Published var events: [BrokerEvent] = []
     /// Bumps per event: keys the ticker line's slide-in.
@@ -124,12 +127,57 @@ final class IslandController {
     private var panel: IslandPanel?
     private var geo = IslandGeometry.current()
     private var collapse: Task<Void, Never>?
+    /// The unfolded card is showing (the island steps aside).
+    private(set) var cardOpen = false
+    /// Unfold the first request (click on its line; the shortcut too).
+    var onUnfold: (() -> Void)?
+
+    // MARK: requests
+
+    /// A request waits as a quiet line; nothing takes focus.
+    func enqueue(_ ev: BrokerEvent) {
+        guard !model.requests.contains(where: { $0.id == ev.id }) else { return }
+        model.requests.append(ev)
+        NSSound(named: "Tink")?.play()
+        guard !cardOpen else { return }
+        collapse?.cancel()
+        if model.mode == .hidden { geo = IslandGeometry.current() }
+        set(.request)
+    }
+
+    /// The request was decided, cancelled or timed out.
+    func remove(_ id: String) {
+        model.requests.removeAll { $0.id == id }
+        if model.requests.isEmpty && model.mode == .request { set(.hidden) }
+    }
+
+    /// Where the request line is, for the card to grow out of.
+    var requestFrame: NSRect { frame(for: .request) }
+
+    /// The card takes over from the line: hide at once, no animation.
+    func cardWillOpen() {
+        cardOpen = true
+        collapse?.cancel()
+        model.mode = .hidden
+        panel?.orderOut(nil)
+    }
+
+    /// The card folded away: show the next waiting request, if any.
+    func cardDidClose() {
+        cardOpen = false
+        if !model.requests.isEmpty { set(.request) }
+    }
+
+    // MARK: ticker
 
     /// A use went through without a popup.
     func show(_ recent: [BrokerEvent]) {
         model.events = Array(recent.prefix(IslandModel.maxRows))
         withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { model.pulse += 1 }
+        if cardOpen { return }
         switch model.mode {
+        case .request:
+            return // a waiting request keeps the island
         case .expanded:
             resize(.expanded) // the list grew
         case .ticker:
@@ -143,13 +191,14 @@ final class IslandController {
 
     func tapped() {
         collapse?.cancel()
+        if model.mode == .request { onUnfold?(); return }
         set(model.mode == .expanded ? .hidden : .expanded)
     }
 
     func hover(_ inside: Bool) {
         if inside {
             collapse?.cancel()
-        } else if model.mode != .hidden {
+        } else if model.mode != .hidden && model.mode != .request {
             schedule(after: model.mode == .expanded ? 1.2 : 2.0)
         }
     }
@@ -158,8 +207,8 @@ final class IslandController {
         collapse?.cancel()
         collapse = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            self.set(.hidden)
+            guard !Task.isCancelled, !self.cardOpen else { return }
+            self.set(self.model.requests.isEmpty ? .hidden : .request)
         }
     }
 
@@ -170,6 +219,8 @@ final class IslandController {
             return geo.tucked
         case .ticker:
             return geo.hanging(width: max(geo.notch.width + sides, 400), height: geo.band + 36)
+        case .request:
+            return geo.hanging(width: max(geo.notch.width + 2 * 170, 560), height: geo.band + 40)
         case .expanded:
             let rows = CGFloat(max(1, min(model.events.count, IslandModel.maxRows)))
             let header: CGFloat = geo.hasNotch ? geo.band : 32
@@ -236,7 +287,7 @@ struct IslandView: View {
     private var radius: CGFloat {
         switch model.mode {
         case .hidden: return 10
-        case .ticker: return 16
+        case .ticker, .request: return 16
         case .expanded: return 22
         }
     }
@@ -256,9 +307,9 @@ struct IslandView: View {
             if model.hasNotch {
                 // Beside the camera: iris on the left, what it was on the right.
                 HStack(spacing: 0) {
-                    irisGlyph
+                    if model.mode == .request { PulsingIris() } else { irisGlyph }
                     Spacer(minLength: model.notchWidth + 8)
-                    accessTag
+                    if model.mode == .request, let r = model.requests.first { Countdown(deadline: r.deadline) } else { accessTag }
                 }
                 .padding(.horizontal, 14)
                 .frame(height: model.band)
@@ -266,6 +317,8 @@ struct IslandView: View {
             switch model.mode {
             case .expanded:
                 list
+            case .request:
+                requestRow
             default:
                 tickerRow
             }
@@ -319,6 +372,56 @@ struct IslandView: View {
         .frame(height: 36)
     }
 
+    /// A waiting request in one line: what, the command, read/write, and
+    /// the shortcut that unfolds it. Clicking does the same.
+    @ViewBuilder private var requestRow: some View {
+        if let r = model.requests.first {
+            HStack(spacing: 8) {
+                if !model.hasNotch { PulsingIris() }
+                Text(islandTitle(r))
+                    .font(Hy.ui(12, 650))
+                    .foregroundStyle(Hy.classG)
+                    .fixedSize()
+                Text(r.target ?? "")
+                    .font(Hy.mono(11.5))
+                    .foregroundStyle(Hy.dust)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 150, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+                if let cmd = r.command, !cmd.isEmpty {
+                    Marquee(text: cmd.replacingOccurrences(of: "(latest Bash command) ", with: "")
+                        .split(whereSeparator: { $0 == "\n" }).joined(separator: " "))
+                        .id(r.id)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer(minLength: 0)
+                }
+                if let a = r.access {
+                    Text(a.uppercased())
+                        .font(Hy.ui(9.5, 650))
+                        .tracking(1)
+                        .foregroundStyle(a == "read" ? Hy.classA : Hy.classK)
+                }
+                if model.requests.count > 1 {
+                    Text("+\(model.requests.count - 1)")
+                        .font(Hy.mono(11))
+                        .foregroundStyle(Hy.faint)
+                }
+                Text(model.shortcut)
+                    .font(Hy.mono(11, 600))
+                    .foregroundStyle(Hy.starlight)
+                    .padding(.horizontal, 6)
+                    .frame(height: 20)
+                    .background(RoundedRectangle(cornerRadius: 4).strokeBorder(Hy.neatlineStrong, lineWidth: 1))
+                if !model.hasNotch { Countdown(deadline: r.deadline) }
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 40)
+            .help("Press \(model.shortcut) or click to read the request and allow it with Touch ID")
+        }
+    }
+
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !model.hasNotch {
@@ -365,6 +468,52 @@ struct IslandView: View {
     }
 }
 
+/// "Kubernetes", "GitLab API"…: what a request is for, in a word or two.
+func islandTitle(_ e: BrokerEvent) -> String {
+    switch e.tool {
+    case "kube": return "Kubernetes"
+    case "aws": return "AWS"
+    case "gcp": return "Google Cloud"
+    case "git": return "Git"
+    case "docker": return "Docker"
+    case "http": return "API"
+    case "network": return "Network"
+    case "ssh":
+        if e.target?.hasPrefix("signature:") == true { return "Signature" }
+        if e.target?.hasPrefix("login:") == true { return "SSH login" }
+        return "SSH"
+    default: return e.tool ?? "Request"
+    }
+}
+
+/// The iris breathing while a request waits.
+struct PulsingIris: View {
+    @State private var on = false
+    var body: some View {
+        Image(nsImage: IrisIcon.image(.closed))
+            .renderingMode(.template)
+            .resizable()
+            .frame(width: 15, height: 15)
+            .foregroundStyle(Hy.classG)
+            .opacity(on ? 1 : 0.35)
+            .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true } }
+    }
+}
+
+/// m:ss until the broker counts the request as denied.
+struct Countdown: View {
+    let deadline: Date?
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let left = max(0, Int((deadline ?? ctx.date).timeIntervalSince(ctx.date)))
+            Text(String(format: "%d:%02d", left / 60, left % 60))
+                .font(Hy.mono(11))
+                .monospacedDigit()
+                .foregroundStyle(left <= 20 ? Hy.classK : Hy.faint)
+        }
+    }
+}
+
 /// Text that scrolls once to its end when it doesn't fit.
 struct Marquee: View {
     let text: String
@@ -402,21 +551,28 @@ final class MorphModel: ObservableObject {
 }
 
 /// Hosts a popup: an island-black shape that morphs into the plate, with
-/// the popup fading in once it has room.
+/// the popup fading in once it has room. Docked under the notch, a black
+/// band (the island) stays on top of it.
 struct MorphHost<Content: View>: View {
     @ObservedObject var morph: MorphModel
     let size: CGSize
+    var topInset: CGFloat = 0
+    var docked = false
     @ViewBuilder let content: Content
 
     var body: some View {
-        let shape = IslandShape(radius: morph.open ? Hy.r2 : 16, topRadius: morph.open ? Hy.r2 : 0)
+        let shape = IslandShape(radius: morph.open ? (docked ? 14 : Hy.r2) : 16,
+                                topRadius: morph.open && !docked ? Hy.r2 : 0)
         shape
             .fill(morph.open ? Hy.skyRaised : Color.black)
             .overlay(alignment: .top) {
-                content
-                    .frame(width: size.width, height: size.height)
-                    .opacity(morph.open ? 1 : 0)
-                    .scaleEffect(morph.open ? 1 : 0.94, anchor: .top)
+                VStack(spacing: 0) {
+                    Color.black.frame(height: topInset)
+                    content
+                        .frame(width: size.width, height: size.height)
+                        .opacity(morph.open ? 1 : 0)
+                        .scaleEffect(morph.open ? 1 : 0.94, anchor: .top)
+                }
             }
             .clipShape(shape)
     }
