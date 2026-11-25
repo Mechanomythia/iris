@@ -136,6 +136,15 @@ func (s *Server) handleBroker(ctx context.Context, nc net.Conn) {
 	case "context":
 		s.B.AddContext(req.Command, req.Cwd, req.SessionID, req.Profile, req.ToolUseID)
 		_ = c.Send(protocol.Response{OK: true})
+	case "unsandboxed":
+		// Asked by the PreToolUse hook. The answer only tells the hook what
+		// to reply to Claude Code; iris runs nothing, so a sandboxed caller
+		// gains nothing by asking.
+		if err := s.B.ApproveUnsandboxed(ctx, req.Command, req.Cwd, req.Profile); err != nil {
+			_ = c.Send(protocol.Response{Error: err.Error()})
+			return
+		}
+		_ = c.Send(protocol.Response{OK: true})
 	case "context-end":
 		// Ending a command only narrows access (drops its grants).
 		s.B.EndContext(req.ToolUseID)

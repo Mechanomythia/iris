@@ -67,7 +67,11 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	// 1. Sandbox on, no escape hatch.
 	try(set("sandbox.enabled", true))
 	try(set("sandbox.failIfUnavailable", true))
-	try(set("sandbox.allowUnsandboxedCommands", false))
+	// Claude may ask to run a command outside the sandbox
+	// (dangerouslyDisableSandbox); iris's PreToolUse hook answers that with
+	// a Touch ID approval, once per command. If the hook can't reach iris,
+	// Claude Code's own prompt asks instead: never silently allowed.
+	try(set("sandbox.allowUnsandboxedCommands", true))
 
 	// 2. Hide credentials.
 	for _, f := range DenyFiles {
@@ -181,20 +185,20 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 	}
 
 	// 5. Hooks: context for the popup, PATH shims, revoke on session end.
-	hook := func(event, matcher, sub string) {
+	hook := func(event, matcher, sub string, timeout ...int) {
 		cmd := shellQuote(o.IrisBin) + " hook " + sub
 		if o.Profile != "" {
 			cmd += " --profile " + shellQuote(o.Profile)
 		}
 		entry := map[string]any{
-			"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 5}},
+			"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": hookTimeout(timeout)}},
 		}
 		if matcher != "" {
 			entry["matcher"] = matcher
 		}
 		try(add("hooks."+event, entry))
 	}
-	hook("PreToolUse", "Bash", "pre-tool-use")
+	hook("PreToolUse", "Bash", "pre-tool-use", 600) // may wait for you to approve running unsandboxed
 	hook("PostToolUse", "Bash", "post-tool-use")
 	hook("SessionStart", "", "session-start")
 	hook("SessionEnd", "", "session-end")
@@ -203,6 +207,13 @@ func Plan(e *Editor, cfg *config.Config, o Options) error {
 		return fmt.Errorf("planning settings: %v", errs)
 	}
 	return nil
+}
+
+func hookTimeout(t []int) int {
+	if len(t) > 0 {
+		return t[0]
+	}
+	return 5
 }
 
 // SSHCommand is Claude's GIT_SSH_COMMAND: ~/.ssh is hidden, so skip its

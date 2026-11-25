@@ -302,6 +302,7 @@ struct ApprovalView: View {
         case "docker": return "Docker registry"
         case "http": return "HTTP API"
         case "network": return "Network access"
+        case "unsandboxed": return "Outside the sandbox"
         case "ssh":
             if event.target?.hasPrefix("signature:") == true { return "Signature" }
             if event.target?.hasPrefix("login:") == true { return "SSH login" }
@@ -342,7 +343,9 @@ struct ApprovalView: View {
             if let pid = event.pid, pid > 0 {
                 row("PID") { mono(String(pid)) }
             }
-            Text("The command comes from Claude and may be inaccurate. Access is limited by the identity, not by the command.")
+            Text(event.tool == "unsandboxed"
+                 ? "This exact command runs as you, outside the sandbox, once. Test and build commands run the repo's code, including code Claude wrote."
+                 : "The command comes from Claude and may be inaccurate. Access is limited by the identity, not by the command.")
                 .font(Hy.ui(11.5))
                 .foregroundStyle(Hy.faint)
                 .fixedSize(horizontal: false, vertical: true)

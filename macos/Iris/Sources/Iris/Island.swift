@@ -478,6 +478,7 @@ func islandTitle(_ e: BrokerEvent) -> String {
     case "docker": return "Docker"
     case "http": return "API"
     case "network": return "Network"
+    case "unsandboxed": return "Unsandboxed"
     case "ssh":
         if e.target?.hasPrefix("signature:") == true { return "Signature" }
         if e.target?.hasPrefix("login:") == true { return "SSH login" }

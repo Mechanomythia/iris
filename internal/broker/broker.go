@@ -561,6 +561,46 @@ func (b *Broker) accessFor(id config.Identity, p ProcInfo) (string, string) {
 	return access.Read, strings.Join(whys, "; ")
 }
 
+// ToolUnsandboxed names requests to run a command outside the sandbox.
+const ToolUnsandboxed = "unsandboxed"
+
+// ApproveUnsandboxed asks whether Claude may run cmd outside the sandbox.
+// Every time, once, Touch ID: no grant ever covers it, and iris runs
+// nothing itself (Claude Code does, after the hook answers "allow").
+func (b *Broker) ApproveUnsandboxed(ctx context.Context, cmd, cwd, profile string) error {
+	cfg := b.Config()
+	once, _ := config.ParseOption("once", 0)
+	once.Label = "Run once"
+	id := config.Identity{Tool: ToolUnsandboxed, Target: cwd, Scope: "runs as you, outside the sandbox",
+		Source: config.Source{Passthrough: true}} // "Your credentials": nothing stands in between
+	timeout := cfg.Approval.Timeout.Duration
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	if q := cfg.Approval.QuietTimeout.Duration; q > 0 && b.Hub.Quiet() {
+		timeout = q
+	}
+	req := approval.Request{
+		ID: grants.NewID(), Identity: id, Profile: profile, Command: cmd, Cwd: cwd,
+		Options: []config.Option{once}, TouchID: true, Deadline: b.now().Add(timeout),
+		Access: access.Write, AccessWhy: "runs outside the sandbox as you: your files, keys and credentials, nothing in between",
+	}
+	d := b.Hub.Ask(ctx, req)
+	ev := "unsandboxed"
+	detail := "allowed via " + d.Via
+	if d.Denied {
+		detail = "denied via " + d.Via
+		if d.TimedOut {
+			detail = "timed out via " + d.Via
+		}
+	}
+	b.Audit.Write(audit.Entry{Event: ev, Tool: ToolUnsandboxed, Target: cwd, Profile: profile, Cwd: cwd, Command: cmd, Detail: detail})
+	if d.Denied {
+		return ErrDenied
+	}
+	return nil
+}
+
 // maxAuto: auto-allowed uses kept for the menu.
 const maxAuto = 100
 

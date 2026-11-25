@@ -45,7 +45,7 @@ func TestPlanAndRevertRoundTrip(t *testing.T) {
 	b, _ := json.Marshal(d)
 	s := string(b)
 	for _, want := range []string{
-		`"enabled":true`, `"allowUnsandboxedCommands":false`, `"failIfUnavailable":true`,
+		`"enabled":true`, `"allowUnsandboxedCommands":true`, `"timeout":600`, `"failIfUnavailable":true`,
 		`/var/run/docker.sock`, paths.BrokerSocket(), `"httpProxyPort":18899`,
 		`{"mode":"deny","path":"~/.kube"}`, `{"mode":"deny","name":"GITHUB_TOKEN"}`,
 		`"Read(~/.kube/**)"`, `"Read(~/.docker/config.json)"`, `"Read(./.env)"`,

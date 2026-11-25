@@ -150,6 +150,10 @@ iris restart
 
 Setting these ports replaces Claude Code's own domain controls for sandbox traffic, so iris is the allowlist from then on. Every decision lands in the audit log.
 
+## Running a command outside the sandbox
+
+Some things can't run in the sandbox (Playwright's browser, for one). Claude can ask to run a single command outside it: Claude Code's `dangerouslyDisableSandbox`, which `iris install` now allows. Iris's PreToolUse hook catches the request and shows it as **Outside the sandbox** with the exact command. You approve with Touch ID, **once**: no time grant or reads grant ever covers it. Claude then runs it as a normal Bash call and gets the output back, so you don't need `!`. If iris can't be reached, Claude Code's own permission prompt asks instead. Outside the sandbox the command runs as you, with your keys and credentials, and test or build commands run the repo's code. Read the card.
+
 ## Requests in the notch
 
 By default a request doesn't pop up and take focus. It waits as one quiet line under the notch: what it's for, the target, the command, READ/WRITE, how many more are waiting, and a countdown (3 minutes; `approval.quietTimeout`). Press **⌥⌘I** (record your own shortcut in the menu) or click the line. The full request unfolds from the notch, with the command, why it's a read or write, the Grant switch and Touch ID. Only that card takes the keyboard; your app stays in front. **Esc** (Later) folds it back, still waiting. Allowing or denying folds it into the notch and shows the next one. Touch ID only works on the unfolded card, so you read before you approve. Switch **Requests in the notch** to *Popup* in the menu for the old centred popup.

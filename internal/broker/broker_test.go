@@ -396,3 +396,32 @@ func TestAccessFromCommands(t *testing.T) {
 		t.Fatal("signing is a write")
 	}
 }
+
+// Running outside the sandbox asks every time, once, with Touch ID, and no
+// grant (not even a full 15m one) ever covers it.
+func TestUnsandboxedAlwaysAsks(t *testing.T) {
+	e := start(t)
+	ctx := context.Background()
+	var asked []approval.Request
+	e.b.Hub.Fallback = func(_ context.Context, r approval.Request) (string, error) {
+		asked = append(asked, r)
+		return r.Options[0].Name, nil
+	}
+	e.b.Grants.Add(ToolUnsandboxed, "/repo", "", "", "15m", 15*time.Minute, false, false)
+	for i := 0; i < 2; i++ {
+		if err := e.b.ApproveUnsandboxed(ctx, "npx playwright test", "/repo", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(asked) != 2 {
+		t.Fatalf("want a prompt each time, got %d", len(asked))
+	}
+	r := asked[0]
+	if !r.TouchID || len(r.Options) != 1 || !r.Options[0].Once || r.Access != "write" || r.Command != "npx playwright test" {
+		t.Fatalf("request: %+v", r)
+	}
+	e.b.Hub.Fallback = func(context.Context, approval.Request) (string, error) { return "reads:15m", nil }
+	if err := e.b.ApproveUnsandboxed(ctx, "x", "/repo", ""); err == nil {
+		t.Fatal("anything but the once option must deny")
+	}
+}

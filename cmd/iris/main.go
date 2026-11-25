@@ -511,7 +511,8 @@ func cmdHook(args []string) error {
 		ToolName  string `json:"tool_name"`
 		ToolUseID string `json:"tool_use_id"`
 		ToolInput struct {
-			Command string `json:"command"`
+			Command                   string `json:"command"`
+			DangerouslyDisableSandbox bool   `json:"dangerouslyDisableSandbox"`
 		} `json:"tool_input"`
 	}
 	b, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
@@ -522,6 +523,9 @@ func cmdHook(args []string) error {
 		if in.ToolName == "Bash" && in.ToolInput.Command != "" {
 			_, _ = protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "context", Command: in.ToolInput.Command,
 				Cwd: in.Cwd, SessionID: in.SessionID, Profile: *profile, ToolUseID: in.ToolUseID}, 2*time.Second)
+			if in.ToolInput.DangerouslyDisableSandbox {
+				unsandboxedDecision(in.ToolInput.Command, in.Cwd, *profile)
+			}
 		}
 	case "post-tool-use":
 		// The command finished: its "this command" approvals end.
@@ -557,6 +561,23 @@ func cmdHook(args []string) error {
 	return nil
 }
 
+// unsandboxedDecision asks iris (Touch ID, once) whether a command may run
+// outside the sandbox and answers Claude Code. When iris can't be reached it
+// prints nothing, so Claude Code's own prompt asks instead.
+func unsandboxedDecision(cmd, cwd, profile string) {
+	resp, err := protocol.Call(paths.BrokerSocket(), protocol.Request{Op: "unsandboxed", Command: cmd, Cwd: cwd, Profile: profile}, 590*time.Second)
+	if err != nil {
+		return
+	}
+	decision, reason := "allow", "The user allowed this command outside the sandbox in iris (Touch ID)."
+	if !resp.OK {
+		decision, reason = "deny", "The user declined running this outside the sandbox in iris. Don't retry it unsandboxed; ask the user or find another way."
+	}
+	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PreToolUse", "permissionDecision": decision, "permissionDecisionReason": reason}})
+	fmt.Println(string(out))
+}
+
 // sessionNote tells Claude how iris works, so it doesn't "fix" the setup by
 // unsetting placeholders or hunting for tokens the sandbox hides on purpose.
 func sessionNote(cfg *config.Config) string {
@@ -585,6 +606,8 @@ func sessionNote(cfg *config.Config) string {
 			"`Host key verification failed` means the host is not in the user's known_hosts (ask them to run `ssh -T git@<host>` once in their terminal); " +
 			"a line starting with `iris:` says exactly what to do. Don't call /usr/bin/ssh directly, pass -F or UserKnownHostsFile, or build your own known_hosts.\n")
 	}
+	b.WriteString("- To run a command outside the sandbox (it needs something the sandbox blocks, e.g. a browser for Playwright), call Bash with dangerouslyDisableSandbox: true. " +
+		"The user approves that exact command in iris with Touch ID, once; don't ask them to use `!` or edit settings. Only do it when the sandbox really is the problem, and keep the command minimal.\n")
 	b.WriteString("- If a request is denied, the user declined it: don't retry with workarounds. " +
 		"If a service rejects a token (401) or a credential can't be read, tell the user and suggest `iris status` / `iris audit` in their own terminal; " +
 		"don't look for other credentials.\n")
